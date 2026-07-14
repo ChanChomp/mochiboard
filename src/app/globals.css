@@ -17,6 +17,8 @@
   --mascot-fill: #fcefe3;
   --mascot-stroke: #6b3f2a;
   --mascot-blush: #f3b79c;
+  --scrollbar-thumb: rgba(217, 122, 77, 0.4);
+  --scrollbar-thumb-hover: rgba(217, 122, 77, 0.65);
   --font-display: "Trebuchet MS", "Segoe UI", "Comic Sans MS", sans-serif;
 }
 
@@ -37,6 +39,8 @@
   --mascot-fill: #fcefe3;
   --mascot-stroke: #6b3f2a;
   --mascot-blush: #f3b79c;
+  --scrollbar-thumb: rgba(217, 122, 77, 0.4);
+  --scrollbar-thumb-hover: rgba(217, 122, 77, 0.65);
 }
 
 :root[data-theme="strawberry"] {
@@ -56,6 +60,8 @@
   --mascot-fill: #fff1f5;
   --mascot-stroke: #7f4252;
   --mascot-blush: #f0a7bb;
+  --scrollbar-thumb: rgba(229, 138, 164, 0.4);
+  --scrollbar-thumb-hover: rgba(229, 138, 164, 0.65);
 }
 
 :root[data-theme="matcha"] {
@@ -75,6 +81,8 @@
   --mascot-fill: #f2f8ea;
   --mascot-stroke: #436448;
   --mascot-blush: #c8dda8;
+  --scrollbar-thumb: rgba(139, 189, 120, 0.4);
+  --scrollbar-thumb-hover: rgba(139, 189, 120, 0.65);
 }
 
 :root[data-theme="ube"] {
@@ -94,6 +102,8 @@
   --mascot-fill: #f5eeff;
   --mascot-stroke: #6a4e97;
   --mascot-blush: #c3aee9;
+  --scrollbar-thumb: rgba(167, 126, 220, 0.4);
+  --scrollbar-thumb-hover: rgba(167, 126, 220, 0.65);
 }
 
 :root[data-theme="black-sesame"] {
@@ -113,6 +123,8 @@
   --mascot-fill: #2f2a24;
   --mascot-stroke: #f5f0e8;
   --mascot-blush: #b8a88e;
+  --scrollbar-thumb: rgba(207, 193, 166, 0.5);
+  --scrollbar-thumb-hover: rgba(207, 193, 166, 0.75);
 }
 
 @theme inline {
@@ -137,6 +149,33 @@ body {
 ::selection {
   background: rgba(217, 122, 77, 0.24);
   color: var(--accent-strong);
+}
+
+/* Themed scrollbars — thumb uses each theme's accent color at a soft opacity,
+   track stays transparent so the surrounding card/background shows through. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb);
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--scrollbar-thumb-hover);
 }
 
 button,

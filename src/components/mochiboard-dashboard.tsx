@@ -389,7 +389,7 @@ export default function MochiboardDashboard() {
                   mochiboard
                 </span>
                 <h1 className="mt-2 text-3xl font-semibold tracking-tight text-[color:var(--foreground)]" style={{ fontFamily: 'var(--font-display)' }}>
-                  Hello, adventurer.
+                  Hello, Chan!
                 </h1>
               </div>
             </div>

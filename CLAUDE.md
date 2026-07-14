@@ -61,6 +61,7 @@ A personal all-in-one productivity web app (planner, calendar, health/fitness tr
 - **Health & Fitness and Finances widgets** — still using mock/placeholder data, not yet connected to Supabase.
 
 ## Known gotchas / lessons learned
+- **Screenshot-based visual verification is unreliable in this environment and should not be attempted.** The Claude Browser tool's screenshot/zoom actions reliably time out here. After making a change, verify correctness through code review and computed-style/logic checks only (e.g. reading the rendered CSS/JS state via `javascript_tool`, type-checking, re-reading the diff), then report what was changed. Do not try to take screenshots, inject temporary test elements to visually check rendering, or use the Claude Browser tool for visual confirmation — unless the user explicitly asks for a visual check in that specific request.
 - The `"allow all for now"` Supabase RLS policy was a deliberate temporary shortcut before auth existed — it has since been replaced with real per-user policies. Do not reintroduce a blanket "allow all" policy.
 - When Claude Code hits a usage limit mid-edit, it can leave code in a broken/incomplete state (e.g. a referenced-but-undefined variable). If this happens, describe the exact error and finish the wiring rather than starting over.
 - When making visual/design decisions, show 2-3 options before committing to code changes, to avoid back-and-forth rework.

@@ -167,10 +167,11 @@ export default function AuthShell({ mode }: { mode: AuthMode }) {
     applyTheme(initialTheme);
   }, []);
 
-  useEffect(() => {
-    applyTheme(theme);
-    window.localStorage.setItem('mochiboard-theme', theme);
-  }, [theme]);
+  const handleThemeSelect = (nextTheme: ThemeKey) => {
+    setTheme(nextTheme);
+    applyTheme(nextTheme);
+    window.localStorage.setItem('mochiboard-theme', nextTheme);
+  };
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -216,7 +217,7 @@ export default function AuthShell({ mode }: { mode: AuthMode }) {
                   key={option.id}
                   type="button"
                   aria-label={`Switch to ${option.label}`}
-                  onClick={() => setTheme(option.id)}
+                  onClick={() => handleThemeSelect(option.id)}
                   className={`h-6 w-6 rounded-full border transition ${isActive ? 'scale-110 border-[color:var(--foreground)]' : 'border-[color:var(--border)]'}`}
                   style={{ backgroundColor: option.swatch }}
                 />
