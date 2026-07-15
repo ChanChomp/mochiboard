@@ -184,3 +184,16 @@ textarea,
 select {
   font: inherit;
 }
+
+@keyframes water-wave-scroll {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-70px);
+  }
+}
+
+.water-wave-path {
+  animation: water-wave-scroll 3s linear infinite;
+}
