@@ -34,6 +34,37 @@ export function useChartType<T extends string>(chartKey: string, defaultType: T)
   return [type, update];
 }
 
+/**
+ * Persists a per-chart period choice (day/week/month/year) to localStorage under
+ * `period:<chartKey>`, so each chart widget's period filter is independent of the others.
+ */
+export function usePeriod<T extends string>(chartKey: string, defaultPeriod: T): [T, (next: T) => void] {
+  const [period, setPeriod] = useState<T>(defaultPeriod);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const raw = window.localStorage.getItem(`period:${chartKey}`);
+      if (raw) setPeriod(raw as T);
+    } catch {
+      // Malformed/inaccessible localStorage — keep the default.
+    }
+  }, [chartKey]);
+
+  const update = (next: T) => {
+    setPeriod(next);
+    if (typeof window !== 'undefined') {
+      try {
+        window.localStorage.setItem(`period:${chartKey}`, next);
+      } catch {
+        // Ignore write failures (e.g. private browsing storage limits).
+      }
+    }
+  };
+
+  return [period, update];
+}
+
 export type ChartTypeOption<T extends string> = { value: T; label: string; icon: ReactNode };
 
 export function ChartTypeToggle<T extends string>({

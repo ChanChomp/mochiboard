@@ -16,19 +16,22 @@ import {
   TREND_CHART_TYPE_OPTIONS,
   TrendChartCanvas,
   useChartType,
+  usePeriod,
   type ChartTypeOption,
   type TrendChartType,
+  type TrendHistoryPoint,
 } from '@/components/trend-chart';
 
-type ViewMode = 'dashboard' | 'planner' | 'health' | 'finances' | 'projects' | 'analytics';
+type ViewMode = 'dashboard' | 'planner' | 'health' | 'finances' | 'projects' | 'books' | 'analytics';
 
 const WIDGET_DEFAULT_ORDER: Record<ViewMode, string[]> = {
   dashboard: ['planner', 'wellness', 'finances'],
   planner: ['calendar', 'todo', 'thisMonth', 'appointments'],
   health: ['bmi', 'weightLog', 'stepsLog', 'waterIntake', 'sleep', 'exercise'],
-  finances: ['balance', 'creditCards', 'loans', 'savings'],
+  finances: ['balance', 'creditCards', 'subscriptions', 'loans', 'savings'],
   projects: ['projects'],
-  analytics: ['spendingByCategory', 'weightTrend', 'stepsTrend', 'waterTrend', 'sleepTrend'],
+  books: ['books'],
+  analytics: ['spendingByCategory', 'incomeTracker', 'weightTrend', 'stepsTrend', 'waterTrend', 'sleepTrend'],
 };
 
 const PROJECT_STATUSES = ['Not Started', 'In Progress', 'Done'] as const;
@@ -45,6 +48,13 @@ type SpendingChartType = 'bar-horizontal' | 'bar-vertical' | 'pie';
 const SPENDING_CHART_TYPE_OPTIONS: ChartTypeOption<SpendingChartType>[] = [
   { value: 'bar-horizontal', label: 'Horizontal bar chart', icon: HorizontalBarChartIcon },
   { value: 'bar-vertical', label: 'Vertical bar chart', icon: BarChartIcon },
+  { value: 'pie', label: 'Pie chart', icon: PieChartIcon },
+];
+
+type IncomeChartType = TrendChartType | 'pie';
+
+const INCOME_CHART_TYPE_OPTIONS: ChartTypeOption<IncomeChartType>[] = [
+  ...TREND_CHART_TYPE_OPTIONS,
   { value: 'pie', label: 'Pie chart', icon: PieChartIcon },
 ];
 
@@ -116,6 +126,7 @@ type TransactionRow = {
   category: string | null;
   subcategory: string | null;
   vendor: string | null;
+  sender_name: string | null;
   price_per_gallon: number | null;
   gallons: number | null;
 };
@@ -169,6 +180,96 @@ type SavingsGoalRow = {
   goal_name: string;
   target_amount: number;
   current_amount: number;
+};
+
+type BookStatus = 'Want to Read' | 'Currently Reading' | 'Finished';
+
+const BOOK_STATUSES: BookStatus[] = ['Want to Read', 'Currently Reading', 'Finished'];
+
+type BookRow = {
+  id: string;
+  created_at: string;
+  user_id: string | null;
+  title: string;
+  author: string | null;
+  genre: string | null;
+  status: BookStatus;
+  current_page: number | null;
+  total_pages: number | null;
+  rating: number | null;
+  finished_date: string | null;
+};
+
+type SubscriptionBillingCycle = 'Monthly' | 'Yearly' | 'Weekly';
+
+const SUBSCRIPTION_BILLING_CYCLES: SubscriptionBillingCycle[] = ['Monthly', 'Yearly', 'Weekly'];
+
+type SubscriptionRow = {
+  id: string;
+  created_at: string;
+  user_id: string | null;
+  subscription_name: string;
+  amount: number;
+  billing_cycle: SubscriptionBillingCycle;
+  card_color: string;
+  renewal_day: number | null;
+  renewal_weekday: number | null;
+  renewal_month: number | null;
+};
+
+const SUBSCRIPTION_WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+const toMonthlySubscriptionAmount = (amount: number, cycle: SubscriptionBillingCycle): number => {
+  if (cycle === 'Yearly') return amount / 12;
+  if (cycle === 'Weekly') return (amount * 52) / 12;
+  return amount;
+};
+
+const subscriptionCycleAbbreviation = (cycle: SubscriptionBillingCycle): string => {
+  if (cycle === 'Yearly') return 'yr';
+  if (cycle === 'Weekly') return 'wk';
+  return 'mo';
+};
+
+// Calculates the next upcoming occurrence of a subscription's renewal from its
+// simplified recurrence fields (day-of-month, day-of-week, or month+day), rather
+// than a stored full date — so it never goes stale as time passes.
+const getNextSubscriptionRenewal = (subscription: SubscriptionRow, today: Date): Date | null => {
+  const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+
+  if (subscription.billing_cycle === 'Monthly') {
+    if (subscription.renewal_day == null) return null;
+    const dayThisMonth = Math.min(subscription.renewal_day, getDaysInMonth(todayStart));
+    let candidate = new Date(todayStart.getFullYear(), todayStart.getMonth(), dayThisMonth);
+    if (candidate < todayStart) {
+      const nextMonthAnchor = new Date(todayStart.getFullYear(), todayStart.getMonth() + 1, 1);
+      const dayNextMonth = Math.min(subscription.renewal_day, getDaysInMonth(nextMonthAnchor));
+      candidate = new Date(nextMonthAnchor.getFullYear(), nextMonthAnchor.getMonth(), dayNextMonth);
+    }
+    return candidate;
+  }
+
+  if (subscription.billing_cycle === 'Weekly') {
+    if (subscription.renewal_weekday == null) return null;
+    const todayWeekdayMon0 = (todayStart.getDay() + 6) % 7;
+    const diff = (subscription.renewal_weekday - todayWeekdayMon0 + 7) % 7;
+    return new Date(todayStart.getFullYear(), todayStart.getMonth(), todayStart.getDate() + diff);
+  }
+
+  if (subscription.billing_cycle === 'Yearly') {
+    if (subscription.renewal_month == null || subscription.renewal_day == null) return null;
+    const monthIndex = subscription.renewal_month - 1;
+    const daysInTargetMonth = getDaysInMonth(new Date(todayStart.getFullYear(), monthIndex, 1));
+    const day = Math.min(subscription.renewal_day, daysInTargetMonth);
+    let candidate = new Date(todayStart.getFullYear(), monthIndex, day);
+    if (candidate < todayStart) {
+      const nextYearDays = getDaysInMonth(new Date(todayStart.getFullYear() + 1, monthIndex, 1));
+      candidate = new Date(todayStart.getFullYear() + 1, monthIndex, Math.min(subscription.renewal_day, nextYearDays));
+    }
+    return candidate;
+  }
+
+  return null;
 };
 
 type AppointmentRow = {
@@ -332,6 +433,7 @@ const TRANSACTION_CATEGORIES = [
   'Shopping/Misc',
   'Financial',
   'Gifts & Donations',
+  'Subscriptions',
   'Income',
 ] as const;
 
@@ -348,7 +450,8 @@ const transactionSubcategoryOptions: Record<string, string[]> = {
   'Shopping/Misc': ['Other'],
   Financial: ['Loan/CC Payments', 'Savings Transfers', 'Other'],
   'Gifts & Donations': ['Other'],
-  Income: ['Paycheck', 'Bonus', 'Refund', 'Gift', 'Interest/Dividends', 'Other'],
+  Subscriptions: ['Streaming', 'Software/Apps', 'Memberships', 'Other'],
+  Income: ['Paycheck', 'Bonus', 'Refund', 'Gift', 'Interest/Dividends', 'Mobile payments', 'Other'],
 };
 
 const workoutTypeIcons: Record<string, ReactElement> = {
@@ -547,6 +650,7 @@ const isTaskOverdue = (task: TaskRow, selectedDayKey: string, now: Date): boolea
 };
 
 type StatsPeriod = 'day' | 'week' | 'month' | 'year';
+type TrendPeriod = StatsPeriod | 'all';
 
 const monthNamesShort = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const monthNamesFull = [
@@ -920,6 +1024,19 @@ const getSilhouetteMetrics = (heightInches: number | null, bmi: number | null, s
 const formatShortDate = (dayKey: string): string => {
   const date = parseDayKeyToDate(dayKey);
   return date ? date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : dayKey;
+};
+
+const historySpansMultipleYears = (history: TrendHistoryPoint[]): boolean => {
+  const years = new Set(history.map((point) => point.logDate.slice(0, 4)));
+  return years.size > 1;
+};
+
+const formatTrendDateLabel = (dayKey: string, includeYear: boolean): string => {
+  const date = parseDayKeyToDate(dayKey);
+  if (!date) return dayKey;
+  return includeYear
+    ? date.toLocaleDateString('en-US', { month: 'short', year: 'numeric' })
+    : date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 };
 
 const formatMonthYearLabel = (monthKey: string): string => {
@@ -1407,6 +1524,17 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
   const [sleepChartType, setSleepChartType] = useChartType<TrendChartType>('sleepTrend', 'bar');
   const [waterChartType, setWaterChartType] = useChartType<TrendChartType>('waterTrend', 'line');
   const [spendingChartType, setSpendingChartType] = useChartType<SpendingChartType>('spendingByCategory', 'bar-horizontal');
+  const [incomeChartType, setIncomeChartType] = useChartType<IncomeChartType>('incomeTracker', 'bar');
+  const [incomeTrendPeriod, setIncomeTrendPeriod] = usePeriod<TrendPeriod>('incomeTracker', 'week');
+  const [incomeTrendAnchorDate, setIncomeTrendAnchorDate] = useState(() => new Date());
+  const [weightTrendPeriod, setWeightTrendPeriod] = usePeriod<TrendPeriod>('weightTrend', 'week');
+  const [weightTrendAnchorDate, setWeightTrendAnchorDate] = useState(() => new Date());
+  const [stepsTrendPeriod, setStepsTrendPeriod] = usePeriod<TrendPeriod>('stepsTrend', 'week');
+  const [stepsTrendAnchorDate, setStepsTrendAnchorDate] = useState(() => new Date());
+  const [sleepTrendPeriod, setSleepTrendPeriod] = usePeriod<TrendPeriod>('sleepTrend', 'week');
+  const [sleepTrendAnchorDate, setSleepTrendAnchorDate] = useState(() => new Date());
+  const [waterTrendPeriod, setWaterTrendPeriod] = usePeriod<TrendPeriod>('waterTrend', 'week');
+  const [waterTrendAnchorDate, setWaterTrendAnchorDate] = useState(() => new Date());
   const [tasks, setTasks] = useState<TaskRow[]>([]);
   const [selectedDay, setSelectedDay] = useState(() => {
     const initialWeekDays = getCurrentWeekDays();
@@ -1589,6 +1717,7 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
   const [newTransactionSubcategory, setNewTransactionSubcategory] = useState('');
   const [newTransactionCustomSubcategory, setNewTransactionCustomSubcategory] = useState('');
   const [newTransactionVendor, setNewTransactionVendor] = useState('');
+  const [newTransactionSenderName, setNewTransactionSenderName] = useState('');
   const [newTransactionPricePerGallon, setNewTransactionPricePerGallon] = useState('');
   const [newTransactionGallons, setNewTransactionGallons] = useState('');
   const [transactionItems, setTransactionItems] = useState<TransactionItemRow[]>([]);
@@ -1610,11 +1739,12 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
   const [gasDetailsError, setGasDetailsError] = useState<string | null>(null);
   const [transactionFilter, setTransactionFilter] = useState<'day' | 'week' | 'month'>('month');
   const [transactionFilterAnchorDate, setTransactionFilterAnchorDate] = useState(() => new Date());
-  const [spendingPeriod, setSpendingPeriod] = useState<StatsPeriod | 'custom'>('month');
+  const [spendingPeriod, setSpendingPeriod] = useState<StatsPeriod | 'custom' | 'all'>('month');
   const [spendingAnchorDate, setSpendingAnchorDate] = useState(() => new Date());
   const [spendingCustomStart, setSpendingCustomStart] = useState('');
   const [spendingCustomEnd, setSpendingCustomEnd] = useState('');
   const spendingChartCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const incomeSourceChartCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const [editingTransactionId, setEditingTransactionId] = useState<string | null>(null);
   const [editTransactionDate, setEditTransactionDate] = useState('');
   const [editTransactionDescription, setEditTransactionDescription] = useState('');
@@ -1689,6 +1819,30 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
   const [depositingGoalId, setDepositingGoalId] = useState<string | null>(null);
   const [depositAmount, setDepositAmount] = useState('');
   const [isSavingDeposit, setIsSavingDeposit] = useState(false);
+  const [subscriptions, setSubscriptions] = useState<SubscriptionRow[]>([]);
+  const [isLoadingSubscriptions, setIsLoadingSubscriptions] = useState(true);
+  const [subscriptionError, setSubscriptionError] = useState<string | null>(null);
+  const [showAddSubscriptionForm, setShowAddSubscriptionForm] = useState(false);
+  const [newSubscriptionName, setNewSubscriptionName] = useState('');
+  const [newSubscriptionAmount, setNewSubscriptionAmount] = useState('');
+  const [newSubscriptionCycle, setNewSubscriptionCycle] = useState<SubscriptionBillingCycle>('Monthly');
+  const [newSubscriptionRenewalDay, setNewSubscriptionRenewalDay] = useState('1');
+  const [newSubscriptionRenewalWeekday, setNewSubscriptionRenewalWeekday] = useState('0');
+  const [newSubscriptionRenewalMonth, setNewSubscriptionRenewalMonth] = useState('1');
+  const [newSubscriptionColor, setNewSubscriptionColor] = useState<string>('peach');
+  const [isSavingSubscription, setIsSavingSubscription] = useState(false);
+  const [activeSubscriptionId, setActiveSubscriptionId] = useState<string | null>(null);
+  const [editingSubscriptionId, setEditingSubscriptionId] = useState<string | null>(null);
+  const [editSubscriptionName, setEditSubscriptionName] = useState('');
+  const [editSubscriptionAmount, setEditSubscriptionAmount] = useState('');
+  const [editSubscriptionCycle, setEditSubscriptionCycle] = useState<SubscriptionBillingCycle>('Monthly');
+  const [editSubscriptionRenewalDay, setEditSubscriptionRenewalDay] = useState('1');
+  const [editSubscriptionRenewalWeekday, setEditSubscriptionRenewalWeekday] = useState('0');
+  const [editSubscriptionRenewalMonth, setEditSubscriptionRenewalMonth] = useState('1');
+  const [editSubscriptionColor, setEditSubscriptionColor] = useState<string>('peach');
+  const [isSavingSubscriptionEdit, setIsSavingSubscriptionEdit] = useState(false);
+  const [deletingSubscriptionId, setDeletingSubscriptionId] = useState<string | null>(null);
+  const [isDeletingSubscription, setIsDeletingSubscription] = useState(false);
   const [projects, setProjects] = useState<ProjectRow[]>([]);
   const [projectSubtasks, setProjectSubtasks] = useState<Record<string, ProjectSubtaskRow[]>>({});
   const [isLoadingProjects, setIsLoadingProjects] = useState(true);
@@ -1709,6 +1863,30 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
   const [promptFinishDateProjectId, setPromptFinishDateProjectId] = useState<string | null>(null);
   const [promptFinishDateValue, setPromptFinishDateValue] = useState('');
   const [promptFinishDateError, setPromptFinishDateError] = useState<string | null>(null);
+  const [books, setBooks] = useState<BookRow[]>([]);
+  const [isLoadingBooks, setIsLoadingBooks] = useState(true);
+  const [bookError, setBookError] = useState<string | null>(null);
+  const [showAddBookForm, setShowAddBookForm] = useState(false);
+  const [newBookTitle, setNewBookTitle] = useState('');
+  const [newBookAuthor, setNewBookAuthor] = useState('');
+  const [newBookGenre, setNewBookGenre] = useState('');
+  const [newBookStatus, setNewBookStatus] = useState<BookStatus>('Want to Read');
+  const [newBookTotalPages, setNewBookTotalPages] = useState('');
+  const [newBookRating, setNewBookRating] = useState(0);
+  const [newBookFinishedDate, setNewBookFinishedDate] = useState('');
+  const [isSavingBook, setIsSavingBook] = useState(false);
+  const [editingBookId, setEditingBookId] = useState<string | null>(null);
+  const [editBookTitle, setEditBookTitle] = useState('');
+  const [editBookAuthor, setEditBookAuthor] = useState('');
+  const [editBookGenre, setEditBookGenre] = useState('');
+  const [editBookStatus, setEditBookStatus] = useState<BookStatus>('Want to Read');
+  const [editBookCurrentPage, setEditBookCurrentPage] = useState('');
+  const [editBookTotalPages, setEditBookTotalPages] = useState('');
+  const [editBookRating, setEditBookRating] = useState(0);
+  const [editBookFinishedDate, setEditBookFinishedDate] = useState('');
+  const [isSavingBookEdit, setIsSavingBookEdit] = useState(false);
+  const [deletingBookId, setDeletingBookId] = useState<string | null>(null);
+  const [isDeletingBook, setIsDeletingBook] = useState(false);
   const [isMarkingProjectComplete, setIsMarkingProjectComplete] = useState(false);
   const [newSubtaskTitleByProject, setNewSubtaskTitleByProject] = useState<Record<string, string>>({});
   const [isSavingSubtaskByProject, setIsSavingSubtaskByProject] = useState<Record<string, boolean>>({});
@@ -2058,6 +2236,37 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
 
   useEffect(() => {
     if (isAuthLoading || !currentUserId) {
+      setSubscriptions([]);
+      setIsLoadingSubscriptions(false);
+      return;
+    }
+
+    const loadSubscriptions = async () => {
+      setIsLoadingSubscriptions(true);
+      setSubscriptionError(null);
+
+      const { data, error } = await supabase
+        .from('subscriptions')
+        .select('*')
+        .eq('user_id', currentUserId)
+        .order('created_at', { ascending: true });
+
+      if (error) {
+        console.error('Unable to load subscriptions:', error);
+        setSubscriptionError(`Unable to load your subscriptions (${error.message}).`);
+        setSubscriptions([]);
+      } else {
+        setSubscriptions(data ?? []);
+      }
+
+      setIsLoadingSubscriptions(false);
+    };
+
+    void loadSubscriptions();
+  }, [currentUserId, isAuthLoading]);
+
+  useEffect(() => {
+    if (isAuthLoading || !currentUserId) {
       setProjects([]);
       setProjectSubtasks({});
       setIsLoadingProjects(false);
@@ -2094,6 +2303,37 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
     };
 
     void loadProjects();
+  }, [currentUserId, isAuthLoading]);
+
+  useEffect(() => {
+    if (isAuthLoading || !currentUserId) {
+      setBooks([]);
+      setIsLoadingBooks(false);
+      return;
+    }
+
+    const loadBooks = async () => {
+      setIsLoadingBooks(true);
+      setBookError(null);
+
+      const { data, error } = await supabase
+        .from('books')
+        .select('*')
+        .eq('user_id', currentUserId)
+        .order('created_at', { ascending: true });
+
+      if (error) {
+        console.error('Unable to load books:', error);
+        setBookError(`Unable to load your books (${error.message}).`);
+        setBooks([]);
+      } else {
+        setBooks(data ?? []);
+      }
+
+      setIsLoadingBooks(false);
+    };
+
+    void loadBooks();
   }, [currentUserId, isAuthLoading]);
 
   useEffect(() => {
@@ -2427,10 +2667,24 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
     () => weightHistory.map((entry) => ({ logDate: entry.log_date, value: entry.value })),
     [weightHistory]
   );
+  const filteredWeightTrendHistory = useMemo(() => {
+    if (weightTrendPeriod === 'all') return weightTrendHistory;
+    const { start, end } = getPeriodRange(weightTrendPeriod, weightTrendAnchorDate);
+    const startKey = toDateKey(start);
+    const endKey = toDateKey(end);
+    return weightTrendHistory.filter((point) => point.logDate >= startKey && point.logDate <= endKey);
+  }, [weightTrendHistory, weightTrendPeriod, weightTrendAnchorDate]);
   const stepsTrendHistory = useMemo(
     () => stepsHistory.map((entry) => ({ logDate: entry.log_date, value: entry.value })),
     [stepsHistory]
   );
+  const filteredStepsTrendHistory = useMemo(() => {
+    if (stepsTrendPeriod === 'all') return stepsTrendHistory;
+    const { start, end } = getPeriodRange(stepsTrendPeriod, stepsTrendAnchorDate);
+    const startKey = toDateKey(start);
+    const endKey = toDateKey(end);
+    return stepsTrendHistory.filter((point) => point.logDate >= startKey && point.logDate <= endKey);
+  }, [stepsTrendHistory, stepsTrendPeriod, stepsTrendAnchorDate]);
   const filteredStepsHistory = useMemo(() => {
     const { start, end } = getPeriodRange(stepsLogFilter, stepsLogAnchorDate);
     const startKey = toDateKey(start);
@@ -2444,10 +2698,22 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
     const endKey = toDateKey(end);
     return waterHistory.filter((row) => row.log_date >= startKey && row.log_date <= endKey);
   }, [waterHistory, waterLogFilter, waterLogAnchorDate]);
-  const waterTrendHistory = useMemo(
-    () => waterHistory.map((entry) => ({ logDate: entry.log_date, value: entry.value })),
-    [waterHistory]
-  );
+  const waterTrendHistory = useMemo(() => {
+    const totals = new Map<string, number>();
+    for (const entry of waterHistory) {
+      totals.set(entry.log_date, (totals.get(entry.log_date) ?? 0) + entry.value);
+    }
+    return [...totals.entries()]
+      .map(([logDate, value]) => ({ logDate, value }))
+      .sort((a, b) => a.logDate.localeCompare(b.logDate));
+  }, [waterHistory]);
+  const filteredWaterTrendHistory = useMemo(() => {
+    if (waterTrendPeriod === 'all') return waterTrendHistory;
+    const { start, end } = getPeriodRange(waterTrendPeriod, waterTrendAnchorDate);
+    const startKey = toDateKey(start);
+    const endKey = toDateKey(end);
+    return waterTrendHistory.filter((point) => point.logDate >= startKey && point.logDate <= endKey);
+  }, [waterTrendHistory, waterTrendPeriod, waterTrendAnchorDate]);
   const filteredWeightHistory = useMemo(() => {
     const { start, end } = getPeriodRange(weightLogFilter, weightLogAnchorDate);
     const startKey = toDateKey(start);
@@ -2455,6 +2721,56 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
     return weightHistory.filter((row) => row.log_date >= startKey && row.log_date <= endKey);
   }, [weightHistory, weightLogFilter, weightLogAnchorDate]);
   const currentBalance = useMemo(() => transactions.reduce((sum, row) => sum + row.amount, 0), [transactions]);
+  const subscriptionMonthlyTotal = useMemo(
+    () => subscriptions.reduce((sum, row) => sum + toMonthlySubscriptionAmount(row.amount, row.billing_cycle), 0),
+    [subscriptions]
+  );
+  const subscriptionYearlyTotal = subscriptionMonthlyTotal * 12;
+  const incomeTrendHistory = useMemo(() => {
+    const totals = new Map<string, number>();
+    for (const row of transactions) {
+      if (row.amount <= 0) continue;
+      totals.set(row.transaction_date, (totals.get(row.transaction_date) ?? 0) + row.amount);
+    }
+    return [...totals.entries()]
+      .map(([logDate, value]) => ({ logDate, value }))
+      .sort((a, b) => a.logDate.localeCompare(b.logDate));
+  }, [transactions]);
+  const filteredIncomeTrendHistory = useMemo(() => {
+    if (incomeTrendPeriod === 'all') return incomeTrendHistory;
+    const { start, end } = getPeriodRange(incomeTrendPeriod, incomeTrendAnchorDate);
+    const startKey = toDateKey(start);
+    const endKey = toDateKey(end);
+    return incomeTrendHistory.filter((point) => point.logDate >= startKey && point.logDate <= endKey);
+  }, [incomeTrendHistory, incomeTrendPeriod, incomeTrendAnchorDate]);
+  const incomeTrendTotal = useMemo(
+    () => filteredIncomeTrendHistory.reduce((sum, point) => sum + point.value, 0),
+    [filteredIncomeTrendHistory]
+  );
+  const incomeBySource = useMemo(() => {
+    let startKey: string | null = null;
+    let endKey: string | null = null;
+    if (incomeTrendPeriod !== 'all') {
+      const { start, end } = getPeriodRange(incomeTrendPeriod, incomeTrendAnchorDate);
+      startKey = toDateKey(start);
+      endKey = toDateKey(end);
+    }
+
+    const totals = new Map<string, number>();
+    for (const row of transactions) {
+      if (row.amount <= 0) continue;
+      if (startKey && endKey && (row.transaction_date < startKey || row.transaction_date > endKey)) continue;
+
+      const subcategory = row.subcategory || 'Other';
+      const source = subcategory === 'Refund' ? row.vendor : subcategory === 'Mobile payments' ? row.sender_name : null;
+      const label = source ? `${subcategory} — ${source}` : subcategory;
+      totals.set(label, (totals.get(label) ?? 0) + row.amount);
+    }
+
+    return [...totals.entries()]
+      .map(([label, total]) => ({ label, total }))
+      .sort((a, b) => b.total - a.total);
+  }, [transactions, incomeTrendPeriod, incomeTrendAnchorDate]);
   const filteredTransactions = useMemo(() => {
     const { start, end } = getPeriodRange(transactionFilter, transactionFilterAnchorDate);
     const startKey = toDateKey(start);
@@ -2464,13 +2780,14 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
   const spendingByCategory = useMemo(() => {
     let startKey: string | null = null;
     let endKey: string | null = null;
+    const includeAll = spendingPeriod === 'all';
 
     if (spendingPeriod === 'custom') {
       if (spendingCustomStart && spendingCustomEnd) {
         startKey = spendingCustomStart <= spendingCustomEnd ? spendingCustomStart : spendingCustomEnd;
         endKey = spendingCustomStart <= spendingCustomEnd ? spendingCustomEnd : spendingCustomStart;
       }
-    } else {
+    } else if (!includeAll) {
       const { start, end } = getPeriodRange(spendingPeriod, spendingAnchorDate);
       startKey = toDateKey(start);
       endKey = toDateKey(end);
@@ -2483,12 +2800,12 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
       }
     });
 
-    if (startKey && endKey) {
+    if (includeAll || (startKey && endKey)) {
       for (const row of transactions) {
         if (row.amount >= 0 || !row.category || !totals.has(row.category)) {
           continue;
         }
-        if (row.transaction_date < startKey || row.transaction_date > endKey) {
+        if (!includeAll && (row.transaction_date < startKey! || row.transaction_date > endKey!)) {
           continue;
         }
         totals.set(row.category, (totals.get(row.category) ?? 0) + Math.abs(row.amount));
@@ -2617,6 +2934,51 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
       chart.destroy();
     };
   }, [spendingByCategory, theme, activeView, spendingChartType]);
+
+  useEffect(() => {
+    const canvas = incomeSourceChartCanvasRef.current;
+    if (!canvas || incomeChartType !== 'pie') {
+      return;
+    }
+
+    const palette = themePalettes[theme];
+    const sources = incomeBySource.filter((entry) => entry.total > 0);
+    const sourceColors = generateCategoryPalette(palette.accent, sources.length);
+    const chart = new Chart(canvas, {
+      type: 'pie',
+      data: {
+        labels: sources.map((entry) => `${entry.label}: ${formatCurrency(entry.total)}`),
+        datasets: [
+          {
+            data: sources.map((entry) => entry.total),
+            backgroundColor: sourceColors,
+            borderColor: palette.surface,
+            borderWidth: 2,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: {
+            display: true,
+            position: 'right',
+            labels: { color: palette.foreground, boxWidth: 12, font: { size: 11 } },
+          },
+          tooltip: {
+            callbacks: {
+              label: (context) => `${sources[context.dataIndex]?.label ?? ''}: ${formatCurrency(Number(context.parsed) || 0)}`,
+            },
+          },
+        },
+      },
+    });
+
+    return () => {
+      chart.destroy();
+    };
+  }, [incomeBySource, incomeChartType, theme, activeView]);
   const todayWaterEntries = useMemo(() => waterHistory.filter((row) => row.log_date === todayKey), [waterHistory, todayKey]);
   const todayWaterOz = todayWaterEntries.reduce((sum, row) => sum + row.value, 0);
   const waterPeriodDayCount = useMemo(
@@ -2645,6 +3007,13 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
     () => sleepHistory.map((entry) => ({ logDate: entry.log_date, value: entry.value })),
     [sleepHistory]
   );
+  const filteredSleepTrendHistory = useMemo(() => {
+    if (sleepTrendPeriod === 'all') return sleepTrendHistory;
+    const { start, end } = getPeriodRange(sleepTrendPeriod, sleepTrendAnchorDate);
+    const startKey = toDateKey(start);
+    const endKey = toDateKey(end);
+    return sleepTrendHistory.filter((point) => point.logDate >= startKey && point.logDate <= endKey);
+  }, [sleepTrendHistory, sleepTrendPeriod, sleepTrendAnchorDate]);
   const todaySleepEntry = useMemo(() => sleepHistory.find((row) => row.log_date === todayKey), [sleepHistory, todayKey]);
   const todaySleepHours = todaySleepEntry?.value ?? 0;
   const todayStepsEntry = useMemo(() => stepsHistory.find((row) => row.log_date === todayKey), [stepsHistory, todayKey]);
@@ -2978,6 +3347,7 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
         ? newTransactionCustomSubcategory.trim() || 'Other'
         : newTransactionSubcategory || null;
     const vendor = newTransactionVendor.trim() || null;
+    const senderName = newTransactionCategory === 'Income' ? newTransactionSenderName.trim() || null : null;
 
     const isGasEntry = newTransactionCategory === 'Transportation' && newTransactionSubcategory === 'Gas';
     let pricePerGallon: number | null = null;
@@ -3012,6 +3382,7 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
         category,
         subcategory,
         vendor,
+        sender_name: senderName,
         price_per_gallon: pricePerGallon,
         gallons,
         user_id: currentUserId,
@@ -3031,6 +3402,7 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
       setNewTransactionSubcategory('');
       setNewTransactionCustomSubcategory('');
       setNewTransactionVendor('');
+      setNewTransactionSenderName('');
       setNewTransactionPricePerGallon('');
       setNewTransactionGallons('');
     }
@@ -3920,6 +4292,225 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
     setIsSavingDeposit(false);
   };
 
+  const validateSubscriptionFields = (
+    name: string,
+    amount: string,
+    cycle: SubscriptionBillingCycle,
+    renewalDay: string,
+    renewalWeekday: string,
+    renewalMonth: string
+  ): {
+    name: string;
+    amount: number;
+    cycle: SubscriptionBillingCycle;
+    renewalDay: number | null;
+    renewalWeekday: number | null;
+    renewalMonth: number | null;
+  } | null => {
+    const trimmedName = name.trim();
+    if (!trimmedName) {
+      setSubscriptionError('Enter a subscription name.');
+      return null;
+    }
+
+    const parsedAmount = Number(amount);
+    if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+      setSubscriptionError('Enter a valid amount.');
+      return null;
+    }
+
+    if (cycle === 'Weekly') {
+      const weekday = Number(renewalWeekday);
+      if (!Number.isInteger(weekday) || weekday < 0 || weekday > 6) {
+        setSubscriptionError('Pick a renewal day of the week.');
+        return null;
+      }
+      return { name: trimmedName, amount: parsedAmount, cycle, renewalDay: null, renewalWeekday: weekday, renewalMonth: null };
+    }
+
+    const day = Number(renewalDay);
+    if (!Number.isInteger(day) || day < 1 || day > 31) {
+      setSubscriptionError('Enter a renewal day between 1 and 31.');
+      return null;
+    }
+
+    if (cycle === 'Yearly') {
+      const month = Number(renewalMonth);
+      if (!Number.isInteger(month) || month < 1 || month > 12) {
+        setSubscriptionError('Pick a renewal month.');
+        return null;
+      }
+      return { name: trimmedName, amount: parsedAmount, cycle, renewalDay: day, renewalWeekday: null, renewalMonth: month };
+    }
+
+    return { name: trimmedName, amount: parsedAmount, cycle, renewalDay: day, renewalWeekday: null, renewalMonth: null };
+  };
+
+  const handleToggleActiveSubscription = (id: string) => {
+    setActiveSubscriptionId((current) => (current === id ? null : id));
+  };
+
+  const handleCreateSubscription = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setSubscriptionError(null);
+
+    if (!currentUserId) {
+      setSubscriptionError('Please sign in to add a subscription.');
+      return;
+    }
+
+    const validated = validateSubscriptionFields(
+      newSubscriptionName,
+      newSubscriptionAmount,
+      newSubscriptionCycle,
+      newSubscriptionRenewalDay,
+      newSubscriptionRenewalWeekday,
+      newSubscriptionRenewalMonth
+    );
+    if (!validated) {
+      return;
+    }
+
+    setIsSavingSubscription(true);
+
+    const { data, error } = await supabase
+      .from('subscriptions')
+      .insert({
+        subscription_name: validated.name,
+        amount: validated.amount,
+        billing_cycle: validated.cycle,
+        renewal_day: validated.renewalDay,
+        renewal_weekday: validated.renewalWeekday,
+        renewal_month: validated.renewalMonth,
+        card_color: newSubscriptionColor,
+        user_id: currentUserId,
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Unable to save subscription:', error);
+      setSubscriptionError(`Unable to add that subscription (${error.message}).`);
+    } else if (data) {
+      setSubscriptions((current) => [...current, data]);
+      setNewSubscriptionName('');
+      setNewSubscriptionAmount('');
+      setNewSubscriptionCycle('Monthly');
+      setNewSubscriptionRenewalDay('1');
+      setNewSubscriptionRenewalWeekday('0');
+      setNewSubscriptionRenewalMonth('1');
+      setNewSubscriptionColor('peach');
+      setShowAddSubscriptionForm(false);
+    }
+
+    setIsSavingSubscription(false);
+  };
+
+  const handleStartEditSubscription = (subscription: SubscriptionRow) => {
+    setActiveSubscriptionId(null);
+    setDeletingSubscriptionId(null);
+    setEditingSubscriptionId(subscription.id);
+    setEditSubscriptionName(subscription.subscription_name);
+    setEditSubscriptionAmount(String(subscription.amount));
+    setEditSubscriptionCycle(subscription.billing_cycle);
+    setEditSubscriptionRenewalDay(subscription.renewal_day != null ? String(subscription.renewal_day) : '1');
+    setEditSubscriptionRenewalWeekday(subscription.renewal_weekday != null ? String(subscription.renewal_weekday) : '0');
+    setEditSubscriptionRenewalMonth(subscription.renewal_month != null ? String(subscription.renewal_month) : '1');
+    setEditSubscriptionColor(subscription.card_color);
+    setSubscriptionError(null);
+  };
+
+  const handleCancelEditSubscription = () => {
+    setEditingSubscriptionId(null);
+    setSubscriptionError(null);
+  };
+
+  const handleSaveEditSubscription = async (event: FormEvent<HTMLFormElement>, id: string) => {
+    event.preventDefault();
+    setSubscriptionError(null);
+
+    const validated = validateSubscriptionFields(
+      editSubscriptionName,
+      editSubscriptionAmount,
+      editSubscriptionCycle,
+      editSubscriptionRenewalDay,
+      editSubscriptionRenewalWeekday,
+      editSubscriptionRenewalMonth
+    );
+    if (!validated) {
+      return;
+    }
+
+    setIsSavingSubscriptionEdit(true);
+
+    const { error } = await supabase
+      .from('subscriptions')
+      .update({
+        subscription_name: validated.name,
+        amount: validated.amount,
+        billing_cycle: validated.cycle,
+        renewal_day: validated.renewalDay,
+        renewal_weekday: validated.renewalWeekday,
+        renewal_month: validated.renewalMonth,
+        card_color: editSubscriptionColor,
+      })
+      .eq('id', id);
+
+    if (error) {
+      console.error('Unable to update subscription:', error);
+      setSubscriptionError(`Unable to update that subscription (${error.message}).`);
+    } else {
+      setSubscriptions((current) =>
+        current.map((row) =>
+          row.id === id
+            ? {
+                ...row,
+                subscription_name: validated.name,
+                amount: validated.amount,
+                billing_cycle: validated.cycle,
+                renewal_day: validated.renewalDay,
+                renewal_weekday: validated.renewalWeekday,
+                renewal_month: validated.renewalMonth,
+                card_color: editSubscriptionColor,
+              }
+            : row
+        )
+      );
+      setEditingSubscriptionId(null);
+    }
+
+    setIsSavingSubscriptionEdit(false);
+  };
+
+  const handleStartDeleteSubscription = (id: string) => {
+    setActiveSubscriptionId(null);
+    setEditingSubscriptionId(null);
+    setDeletingSubscriptionId(id);
+    setSubscriptionError(null);
+  };
+
+  const handleCancelDeleteSubscription = () => {
+    setDeletingSubscriptionId(null);
+    setSubscriptionError(null);
+  };
+
+  const handleConfirmDeleteSubscription = async (id: string) => {
+    setIsDeletingSubscription(true);
+    setSubscriptionError(null);
+
+    const { error } = await supabase.from('subscriptions').delete().eq('id', id);
+
+    if (error) {
+      console.error('Unable to delete subscription:', error);
+      setSubscriptionError(`Unable to delete that subscription (${error.message}).`);
+    } else {
+      setSubscriptions((current) => current.filter((row) => row.id !== id));
+    }
+
+    setDeletingSubscriptionId(null);
+    setIsDeletingSubscription(false);
+  };
+
   const handleCreateProject = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setProjectError(null);
@@ -4193,6 +4784,489 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
 
   const handleToggleExpandProject = (projectId: string) => {
     setExpandedProjectIds((current) => ({ ...current, [projectId]: !current[projectId] }));
+  };
+
+  const validateBookFields = (
+    title: string,
+    status: BookStatus,
+    currentPage: string,
+    totalPages: string,
+    rating: number,
+    finishedDate: string
+  ): {
+    title: string;
+    status: BookStatus;
+    currentPage: number | null;
+    totalPages: number | null;
+    rating: number | null;
+    finishedDate: string | null;
+  } | null => {
+    const trimmedTitle = title.trim();
+    if (!trimmedTitle) {
+      setBookError('Enter a book title.');
+      return null;
+    }
+
+    let parsedCurrentPage: number | null = null;
+    let parsedTotalPages: number | null = null;
+
+    if (status === 'Currently Reading' || status === 'Finished') {
+      if (totalPages.trim()) {
+        parsedTotalPages = Number(totalPages);
+        if (!Number.isInteger(parsedTotalPages) || parsedTotalPages <= 0) {
+          setBookError('Enter a valid total page count.');
+          return null;
+        }
+      }
+    }
+
+    if (status === 'Currently Reading') {
+      if (currentPage.trim()) {
+        parsedCurrentPage = Number(currentPage);
+        if (!Number.isInteger(parsedCurrentPage) || parsedCurrentPage < 0) {
+          setBookError('Enter a valid current page.');
+          return null;
+        }
+      } else {
+        parsedCurrentPage = 0;
+      }
+    }
+
+    const parsedRating = status === 'Finished' && rating > 0 ? rating : null;
+    const parsedFinishedDate = status === 'Finished' ? finishedDate.trim() || null : null;
+
+    return {
+      title: trimmedTitle,
+      status,
+      currentPage: parsedCurrentPage,
+      totalPages: parsedTotalPages,
+      rating: parsedRating,
+      finishedDate: parsedFinishedDate,
+    };
+  };
+
+  const handleCreateBook = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setBookError(null);
+
+    if (!currentUserId) {
+      setBookError('Please sign in to add a book.');
+      return;
+    }
+
+    const validated = validateBookFields(newBookTitle, newBookStatus, '0', newBookTotalPages, newBookRating, newBookFinishedDate);
+    if (!validated) {
+      return;
+    }
+
+    setIsSavingBook(true);
+
+    const { data, error } = await supabase
+      .from('books')
+      .insert({
+        title: validated.title,
+        author: newBookAuthor.trim() || null,
+        genre: newBookGenre.trim() || null,
+        status: validated.status,
+        current_page: validated.currentPage,
+        total_pages: validated.totalPages,
+        rating: validated.rating,
+        finished_date: validated.finishedDate,
+        user_id: currentUserId,
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Unable to save book:', error);
+      setBookError(`Unable to add that book (${error.message}).`);
+    } else if (data) {
+      setBooks((current) => [...current, data]);
+      setNewBookTitle('');
+      setNewBookAuthor('');
+      setNewBookGenre('');
+      setNewBookStatus('Want to Read');
+      setNewBookTotalPages('');
+      setNewBookRating(0);
+      setNewBookFinishedDate('');
+      setShowAddBookForm(false);
+    }
+
+    setIsSavingBook(false);
+  };
+
+  const handleStartEditBook = (book: BookRow) => {
+    setDeletingBookId(null);
+    setEditingBookId(book.id);
+    setEditBookTitle(book.title);
+    setEditBookAuthor(book.author ?? '');
+    setEditBookGenre(book.genre ?? '');
+    setEditBookStatus(book.status);
+    setEditBookCurrentPage(book.current_page != null ? String(book.current_page) : '0');
+    setEditBookTotalPages(book.total_pages != null ? String(book.total_pages) : '');
+    setEditBookRating(book.rating ?? 0);
+    setEditBookFinishedDate(book.finished_date ?? '');
+    setBookError(null);
+  };
+
+  const handleCancelEditBook = () => {
+    setEditingBookId(null);
+    setBookError(null);
+  };
+
+  const handleSaveEditBook = async (event: FormEvent<HTMLFormElement>, id: string) => {
+    event.preventDefault();
+    setBookError(null);
+
+    const validated = validateBookFields(
+      editBookTitle,
+      editBookStatus,
+      editBookCurrentPage,
+      editBookTotalPages,
+      editBookRating,
+      editBookFinishedDate
+    );
+    if (!validated) {
+      return;
+    }
+
+    setIsSavingBookEdit(true);
+
+    const updatedFields = {
+      title: validated.title,
+      author: editBookAuthor.trim() || null,
+      genre: editBookGenre.trim() || null,
+      status: validated.status,
+      current_page: validated.currentPage,
+      total_pages: validated.totalPages,
+      rating: validated.rating,
+      finished_date: validated.finishedDate,
+    };
+
+    const { error } = await supabase.from('books').update(updatedFields).eq('id', id);
+
+    if (error) {
+      console.error('Unable to update book:', error);
+      setBookError(`Unable to update that book (${error.message}).`);
+    } else {
+      setBooks((current) => current.map((row) => (row.id === id ? { ...row, ...updatedFields } : row)));
+      setEditingBookId(null);
+    }
+
+    setIsSavingBookEdit(false);
+  };
+
+  const handleStartDeleteBook = (id: string) => {
+    setEditingBookId(null);
+    setDeletingBookId(id);
+    setBookError(null);
+  };
+
+  const handleCancelDeleteBook = () => {
+    setDeletingBookId(null);
+    setBookError(null);
+  };
+
+  const handleConfirmDeleteBook = async (id: string) => {
+    setIsDeletingBook(true);
+    setBookError(null);
+
+    const { error } = await supabase.from('books').delete().eq('id', id);
+
+    if (error) {
+      console.error('Unable to delete book:', error);
+      setBookError(`Unable to delete that book (${error.message}).`);
+    } else {
+      setBooks((current) => current.filter((row) => row.id !== id));
+    }
+
+    setDeletingBookId(null);
+    setIsDeletingBook(false);
+  };
+
+  const handleSetBookRating = async (book: BookRow, rating: number) => {
+    const previousRating = book.rating;
+    setBooks((current) => current.map((row) => (row.id === book.id ? { ...row, rating } : row)));
+
+    const { error } = await supabase.from('books').update({ rating }).eq('id', book.id);
+
+    if (error) {
+      console.error('Unable to update rating:', error);
+      setBookError(`Unable to update that rating (${error.message}).`);
+      setBooks((current) => current.map((row) => (row.id === book.id ? { ...row, rating: previousRating } : row)));
+    }
+  };
+
+  const wantToReadBooks = books.filter((book) => book.status === 'Want to Read');
+  const currentlyReadingBooks = books.filter((book) => book.status === 'Currently Reading');
+  const finishedBooks = books.filter((book) => book.status === 'Finished');
+
+  const renderStarIcon = (filled: boolean) =>
+    filled ? (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+        <path d="M12 2.5l2.9 6.06 6.6.77-4.86 4.55 1.28 6.52L12 17.9l-5.92 3.5 1.28-6.52-4.86-4.55 6.6-.77L12 2.5z" />
+      </svg>
+    ) : (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path
+          d="M12 2.5l2.9 6.06 6.6.77-4.86 4.55 1.28 6.52L12 17.9l-5.92 3.5 1.28-6.52-4.86-4.55 6.6-.77L12 2.5z"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinejoin="round"
+        />
+      </svg>
+    );
+
+  const renderBookRow = (book: BookRow) => {
+    const isEditingThisBook = editingBookId === book.id;
+    const isDeletingThisBook = deletingBookId === book.id;
+    const progressPercent =
+      book.total_pages && book.total_pages > 0
+        ? Math.min(100, Math.round(((book.current_page ?? 0) / book.total_pages) * 100))
+        : 0;
+
+    if (isDeletingThisBook) {
+      return (
+        <div key={book.id} className="rounded-[20px] border border-[color:var(--border)] bg-[color:var(--surface-soft)] p-3">
+          <p className="text-sm text-[color:var(--foreground)]">Delete &ldquo;{book.title}&rdquo;?</p>
+          <div className="mt-2 flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={handleCancelDeleteBook}
+              className="rounded-full border border-[color:var(--border)] px-3 py-1.5 text-xs font-semibold text-[color:var(--muted)] transition hover:bg-[color:var(--surface-strong)]"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleConfirmDeleteBook(book.id)}
+              disabled={isDeletingBook}
+              className="rounded-full px-3 py-1.5 text-xs font-semibold text-white transition disabled:opacity-70"
+              style={{ backgroundColor: '#dc2626' }}
+            >
+              {isDeletingBook ? 'Deleting…' : 'Delete'}
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    if (isEditingThisBook) {
+      return (
+        <form
+          key={book.id}
+          onSubmit={(event) => void handleSaveEditBook(event, book.id)}
+          className="space-y-2 rounded-[20px] border border-[color:var(--accent)] bg-[color:var(--surface-soft)] p-3"
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              value={editBookTitle}
+              onChange={(event) => setEditBookTitle(event.target.value)}
+              placeholder="Title"
+              autoFocus
+              aria-label="Book title"
+              className="min-w-0 flex-1 basis-[140px] rounded-full border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-sm text-[color:var(--foreground)] outline-none"
+            />
+            <input
+              value={editBookAuthor}
+              onChange={(event) => setEditBookAuthor(event.target.value)}
+              placeholder="Author (optional)"
+              aria-label="Author"
+              className="min-w-0 flex-1 basis-[140px] rounded-full border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-sm text-[color:var(--foreground)] outline-none"
+            />
+            <input
+              value={editBookGenre}
+              onChange={(event) => setEditBookGenre(event.target.value)}
+              placeholder="Genre (optional)"
+              aria-label="Genre"
+              className="min-w-0 flex-1 basis-[140px] rounded-full border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-sm text-[color:var(--foreground)] outline-none"
+            />
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              value={editBookStatus}
+              onChange={(event) => setEditBookStatus(event.target.value as BookStatus)}
+              aria-label="Status"
+              className="min-w-0 flex-1 rounded-full border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-sm text-[color:var(--foreground)] outline-none"
+            >
+              {BOOK_STATUSES.map((status) => (
+                <option key={status} value={status}>
+                  {status}
+                </option>
+              ))}
+            </select>
+            {editBookStatus === 'Currently Reading' ? (
+              <input
+                type="number"
+                min="0"
+                step="1"
+                value={editBookCurrentPage}
+                onChange={(event) => setEditBookCurrentPage(event.target.value)}
+                placeholder="Current page"
+                aria-label="Current page"
+                className="min-w-0 max-w-[120px] flex-1 rounded-full border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-sm text-[color:var(--foreground)] outline-none"
+              />
+            ) : null}
+            {editBookStatus === 'Currently Reading' || editBookStatus === 'Finished' ? (
+              <input
+                type="number"
+                min="1"
+                step="1"
+                value={editBookTotalPages}
+                onChange={(event) => setEditBookTotalPages(event.target.value)}
+                placeholder="Total pages"
+                aria-label="Total pages"
+                className="min-w-0 max-w-[120px] flex-1 rounded-full border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-sm text-[color:var(--foreground)] outline-none"
+              />
+            ) : null}
+            {editBookStatus === 'Finished' ? (
+              <input
+                type="date"
+                value={editBookFinishedDate}
+                onChange={(event) => setEditBookFinishedDate(event.target.value)}
+                aria-label="Finished date"
+                className="min-w-0 flex-1 rounded-full border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-sm text-[color:var(--foreground)] outline-none"
+              />
+            ) : null}
+          </div>
+
+          {editBookStatus === 'Finished' ? (
+            <div className="flex items-center gap-1">
+              {[1, 2, 3, 4, 5].map((star) => (
+                <button
+                  key={star}
+                  type="button"
+                  onClick={() => setEditBookRating(star)}
+                  aria-label={`Set rating to ${star} star${star === 1 ? '' : 's'}`}
+                  className="text-[color:var(--accent)] transition hover:scale-110"
+                >
+                  {renderStarIcon(star <= editBookRating)}
+                </button>
+              ))}
+            </div>
+          ) : null}
+
+          {bookError ? <p className="text-xs font-medium text-red-500">{bookError}</p> : null}
+
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={handleCancelEditBook}
+              className="rounded-full border border-[color:var(--border)] px-3 py-1.5 text-xs font-semibold text-[color:var(--muted)] transition hover:bg-[color:var(--surface-strong)]"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={isSavingBookEdit}
+              className="rounded-full bg-[color:var(--accent)] px-4 py-1.5 text-xs font-semibold text-[color:var(--accent-contrast)] transition hover:bg-[color:var(--accent-strong)] disabled:opacity-70"
+            >
+              {isSavingBookEdit ? 'Saving…' : 'Save'}
+            </button>
+          </div>
+        </form>
+      );
+    }
+
+    return (
+      <div
+        key={book.id}
+        className="rounded-[20px] border border-[color:var(--border)] bg-[color:var(--surface-strong)] p-3 shadow-[var(--shadow-soft)]"
+      >
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold text-[color:var(--foreground)]">{book.title}</p>
+            {book.author ? <p className="truncate text-xs text-[color:var(--muted)]">{book.author}</p> : null}
+            {book.genre ? (
+              <span className="mt-1 inline-block rounded-full bg-[color:var(--accent-soft)] px-2 py-0.5 text-[10px] font-semibold text-[color:var(--accent-strong)]">
+                {book.genre}
+              </span>
+            ) : null}
+          </div>
+          <div className="flex shrink-0 items-center gap-1">
+            <button
+              type="button"
+              onClick={() => handleStartEditBook(book)}
+              aria-label="Edit book"
+              className="rounded-full p-1.5 text-[color:var(--muted)] transition hover:bg-[color:var(--surface-soft)] hover:text-[color:var(--accent-strong)]"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path
+                  d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleStartDeleteBook(book.id)}
+              aria-label="Delete book"
+              className="rounded-full p-1.5 text-[color:var(--muted)] transition hover:bg-[color:var(--surface-soft)] hover:text-[color:var(--accent-strong)]"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M4 7h16" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                <path
+                  d="M9 7V4.5A1.5 1.5 0 0 1 10.5 3h3A1.5 1.5 0 0 1 15 4.5V7"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+                <path
+                  d="M6 7l1 13a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-13"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        {book.status === 'Currently Reading' ? (
+          <>
+            <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+              <div
+                className="h-1.5 rounded-full transition-[width]"
+                style={{ width: `${progressPercent}%`, background: 'linear-gradient(90deg, #ffb199 0%, #ff6f91 100%)' }}
+              />
+            </div>
+            <p className="mt-1.5 text-xs text-[color:var(--muted)]">
+              {progressPercent}% · page {book.current_page ?? 0} of {book.total_pages ?? '?'}
+            </p>
+          </>
+        ) : null}
+
+        {book.status === 'Finished' ? (
+          <>
+            {book.finished_date ? (
+              <p className="mt-2 text-xs text-[color:var(--muted)]">Finished {formatShortDate(book.finished_date)}</p>
+            ) : null}
+            {book.total_pages ? (
+              <p className="mt-0.5 text-xs text-[color:var(--muted)]">{book.total_pages} pages</p>
+            ) : null}
+            <div className="mt-1.5 flex items-center gap-1">
+              {[1, 2, 3, 4, 5].map((star) => (
+                <button
+                  key={star}
+                  type="button"
+                  onClick={() => void handleSetBookRating(book, star)}
+                  aria-label={`Rate ${star} star${star === 1 ? '' : 's'}`}
+                  className="text-[color:var(--accent)] transition hover:scale-110"
+                >
+                  {renderStarIcon(star <= (book.rating ?? 0))}
+                </button>
+              ))}
+            </div>
+          </>
+        ) : null}
+      </div>
+    );
   };
 
   const activeProjects = projects.filter((project) => project.status !== 'Done');
@@ -5724,6 +6798,7 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
     { href: '/health', label: 'Health & Fitness' },
     { href: '/finances', label: 'Finances' },
     { href: '/projects', label: 'Projects' },
+    { href: '/books', label: 'Books' },
     { href: '/analytics', label: 'Reports' },
   ];
 
@@ -8797,6 +9872,15 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
                       aria-label="Vendor or place"
                       className="min-w-0 flex-1 basis-[150px] rounded-full border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-sm text-[color:var(--foreground)] outline-none"
                     />
+                    {newTransactionCategory === 'Income' ? (
+                      <input
+                        value={newTransactionSenderName}
+                        onChange={(event) => setNewTransactionSenderName(event.target.value)}
+                        placeholder="From (sender name, optional)"
+                        aria-label="From (sender name)"
+                        className="min-w-0 flex-1 basis-[150px] rounded-full border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-sm text-[color:var(--foreground)] outline-none"
+                      />
+                    ) : null}
                   </div>
 
                   {newTransactionCategory === 'Transportation' && newTransactionSubcategory === 'Gas' ? (
@@ -8884,7 +9968,8 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
                       const categoryLabel = entry.category
                         ? `${entry.category}${entry.subcategory ? ` · ${entry.subcategory}` : ''}`
                         : null;
-                      const identityTokens = [categoryLabel, entry.vendor].filter((token): token is string => Boolean(token));
+                      const senderLabel = entry.sender_name ? `from ${entry.sender_name}` : null;
+                      const identityTokens = [categoryLabel, senderLabel, entry.vendor].filter((token): token is string => Boolean(token));
                       const fallbackTitle = !hasDescription && identityTokens.length > 0 ? identityTokens[0] : null;
                       const displayTitle = hasDescription ? entry.description : fallbackTitle || 'Transaction';
 
@@ -9766,6 +10851,397 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
               </section>
               </DraggableWidget>
 
+              <DraggableWidget id="subscriptions" key="subscriptions">
+              <section className="rounded-[34px] border border-[color:var(--border)] bg-[color:var(--surface)] p-5 shadow-[var(--shadow-soft)]">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    {widgetIcons[theme]}
+                    <p className="text-sm font-semibold uppercase tracking-[0.24em] text-[color:var(--muted)]">📺 Subscriptions</p>
+                  </div>
+                  <span className="rounded-full bg-[color:var(--accent-soft)] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em] text-[color:var(--accent-strong)]">
+                    {formatCurrency(subscriptionMonthlyTotal)}/mo · {formatCurrency(subscriptionYearlyTotal)}/yr
+                  </span>
+                </div>
+
+                {subscriptionError ? <p className="mt-3 text-xs font-medium text-red-500">{subscriptionError}</p> : null}
+
+                <div className="mt-4 grid grid-cols-2 items-start gap-3">
+                  {isLoadingSubscriptions ? (
+                    <div className="col-span-2 rounded-[20px] border border-[color:var(--border)] bg-[color:var(--surface-soft)] p-4 text-sm text-[color:var(--muted)]">
+                      Loading your subscriptions…
+                    </div>
+                  ) : (
+                    subscriptions.map((subscription, index) => {
+                      const isActive = activeSubscriptionId === subscription.id;
+                      const isEditingSubscription = editingSubscriptionId === subscription.id;
+                      const isDeletingThisSubscription = deletingSubscriptionId === subscription.id;
+                      const activeColorId = isEditingSubscription ? editSubscriptionColor : subscription.card_color;
+                      const gradient =
+                        cardColorOptions.find((option) => option.id === activeColorId) ??
+                        cardColorOptions[index % cardColorOptions.length];
+                      const nextRenewal = getNextSubscriptionRenewal(subscription, now);
+
+                      return (
+                        <div key={subscription.id} className="overflow-hidden rounded-[24px] shadow-[var(--shadow-soft)]">
+                          <button
+                            type="button"
+                            onClick={() => handleToggleActiveSubscription(subscription.id)}
+                            aria-expanded={isActive}
+                            className="w-full p-4 text-left text-white transition"
+                            style={{ background: `linear-gradient(135deg, ${gradient.from} 0%, ${gradient.to} 100%)` }}
+                          >
+                            <p className="truncate text-sm font-semibold">{subscription.subscription_name}</p>
+                            <p className="mt-2 text-xl font-semibold tabular-nums" style={{ fontFamily: 'var(--font-display)' }}>
+                              {formatCurrency(subscription.amount)}
+                              <span className="ml-1 text-xs font-medium text-white/80">
+                                /{subscriptionCycleAbbreviation(subscription.billing_cycle)}
+                              </span>
+                            </p>
+                            {nextRenewal ? (
+                              <p className="mt-1 text-xs font-medium text-white/85">Renews {formatShortDate(toDateKey(nextRenewal))}</p>
+                            ) : null}
+                          </button>
+
+                          {isEditingSubscription ? (
+                            <form
+                              onSubmit={(event) => void handleSaveEditSubscription(event, subscription.id)}
+                              className="rounded-b-[24px] border border-t-0 border-[color:var(--border)] bg-[color:var(--surface-soft)] p-4"
+                            >
+                              <div className="flex flex-wrap items-center gap-2">
+                                <input
+                                  value={editSubscriptionName}
+                                  onChange={(event) => setEditSubscriptionName(event.target.value)}
+                                  placeholder="Subscription name"
+                                  autoFocus
+                                  aria-label="Subscription name"
+                                  className="min-w-0 flex-1 basis-[140px] rounded-full border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-sm text-[color:var(--foreground)] outline-none"
+                                />
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="0.01"
+                                  value={editSubscriptionAmount}
+                                  onChange={(event) => setEditSubscriptionAmount(event.target.value)}
+                                  placeholder="Amount"
+                                  aria-label="Amount"
+                                  className="min-w-0 max-w-[110px] flex-1 rounded-full border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-sm text-[color:var(--foreground)] outline-none"
+                                />
+                                <select
+                                  value={editSubscriptionCycle}
+                                  onChange={(event) => setEditSubscriptionCycle(event.target.value as SubscriptionBillingCycle)}
+                                  aria-label="Billing cycle"
+                                  className="min-w-0 flex-1 rounded-full border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-sm text-[color:var(--foreground)] outline-none"
+                                >
+                                  {SUBSCRIPTION_BILLING_CYCLES.map((cycle) => (
+                                    <option key={cycle} value={cycle}>
+                                      {cycle}
+                                    </option>
+                                  ))}
+                                </select>
+                                {editSubscriptionCycle === 'Weekly' ? (
+                                  <select
+                                    value={editSubscriptionRenewalWeekday}
+                                    onChange={(event) => setEditSubscriptionRenewalWeekday(event.target.value)}
+                                    aria-label="Renewal day of week"
+                                    className="min-w-0 flex-1 rounded-full border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-sm text-[color:var(--foreground)] outline-none"
+                                  >
+                                    {SUBSCRIPTION_WEEKDAYS.map((label, weekdayIndex) => (
+                                      <option key={label} value={weekdayIndex}>
+                                        {label}
+                                      </option>
+                                    ))}
+                                  </select>
+                                ) : (
+                                  <>
+                                    {editSubscriptionCycle === 'Yearly' ? (
+                                      <select
+                                        value={editSubscriptionRenewalMonth}
+                                        onChange={(event) => setEditSubscriptionRenewalMonth(event.target.value)}
+                                        aria-label="Renewal month"
+                                        className="min-w-0 flex-1 rounded-full border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-sm text-[color:var(--foreground)] outline-none"
+                                      >
+                                        {monthNamesShort.map((label, monthIndex) => (
+                                          <option key={label} value={monthIndex + 1}>
+                                            {label}
+                                          </option>
+                                        ))}
+                                      </select>
+                                    ) : null}
+                                    <input
+                                      type="number"
+                                      min="1"
+                                      max="31"
+                                      step="1"
+                                      value={editSubscriptionRenewalDay}
+                                      onChange={(event) => setEditSubscriptionRenewalDay(event.target.value)}
+                                      placeholder="Renewal day"
+                                      aria-label="Renewal day"
+                                      className="min-w-0 max-w-[110px] flex-1 rounded-full border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-sm text-[color:var(--foreground)] outline-none"
+                                    />
+                                  </>
+                                )}
+                              </div>
+
+                              <div className="mt-3 flex flex-wrap items-center gap-2">
+                                <span className="text-[11px] font-semibold uppercase tracking-[0.24em] text-[color:var(--muted)]">Color</span>
+                                {cardColorOptions.map((option) => {
+                                  const isColorActive = editSubscriptionColor === option.id;
+                                  return (
+                                    <button
+                                      key={option.id}
+                                      type="button"
+                                      aria-label={`Use ${option.label} color`}
+                                      onClick={() => setEditSubscriptionColor(option.id)}
+                                      className={`h-6 w-6 rounded-full border transition ${
+                                        isColorActive ? 'scale-110 border-[color:var(--foreground)]' : 'border-[color:var(--border)]'
+                                      }`}
+                                      style={{ backgroundColor: option.swatch }}
+                                    />
+                                  );
+                                })}
+                              </div>
+
+                              {subscriptionError ? <p className="mt-2 text-xs font-medium text-red-500">{subscriptionError}</p> : null}
+
+                              <div className="mt-3 flex justify-end gap-2">
+                                <button
+                                  type="button"
+                                  onClick={handleCancelEditSubscription}
+                                  className="rounded-full border border-[color:var(--border)] px-3 py-1.5 text-xs font-semibold text-[color:var(--muted)] transition hover:bg-[color:var(--surface-strong)]"
+                                >
+                                  Cancel
+                                </button>
+                                <button
+                                  type="submit"
+                                  disabled={isSavingSubscriptionEdit}
+                                  className="rounded-full bg-[color:var(--accent)] px-4 py-1.5 text-xs font-semibold text-[color:var(--accent-contrast)] transition hover:bg-[color:var(--accent-strong)] disabled:opacity-70"
+                                >
+                                  {isSavingSubscriptionEdit ? 'Saving…' : 'Save'}
+                                </button>
+                              </div>
+                            </form>
+                          ) : isDeletingThisSubscription ? (
+                            <div className="rounded-b-[24px] border border-t-0 border-[color:var(--border)] bg-[color:var(--surface-soft)] p-3">
+                              <p className="text-sm text-[color:var(--foreground)]">Delete &ldquo;{subscription.subscription_name}&rdquo;?</p>
+                              <div className="mt-2 flex justify-end gap-2">
+                                <button
+                                  type="button"
+                                  onClick={handleCancelDeleteSubscription}
+                                  className="rounded-full border border-[color:var(--border)] px-3 py-1.5 text-xs font-semibold text-[color:var(--muted)] transition hover:bg-[color:var(--surface-strong)]"
+                                >
+                                  Cancel
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => void handleConfirmDeleteSubscription(subscription.id)}
+                                  disabled={isDeletingSubscription}
+                                  className="rounded-full px-3 py-1.5 text-xs font-semibold text-white transition disabled:opacity-70"
+                                  style={{ backgroundColor: '#dc2626' }}
+                                >
+                                  {isDeletingSubscription ? 'Deleting…' : 'Delete'}
+                                </button>
+                              </div>
+                            </div>
+                          ) : isActive ? (
+                            <div className="flex items-center justify-end gap-1 rounded-b-[24px] border border-t-0 border-[color:var(--border)] bg-[color:var(--surface-soft)] p-2">
+                              <button
+                                type="button"
+                                onClick={() => handleStartEditSubscription(subscription)}
+                                aria-label="Edit subscription"
+                                className="rounded-full p-1.5 text-[color:var(--muted)] transition hover:bg-[color:var(--surface-strong)] hover:text-[color:var(--accent-strong)]"
+                              >
+                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                  <path
+                                    d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"
+                                    stroke="currentColor"
+                                    strokeWidth="2"
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                  />
+                                </svg>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleStartDeleteSubscription(subscription.id)}
+                                aria-label="Delete subscription"
+                                className="rounded-full p-1.5 text-[color:var(--muted)] transition hover:bg-[color:var(--surface-strong)] hover:text-[color:var(--accent-strong)]"
+                              >
+                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                  <path d="M4 7h16" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                                  <path
+                                    d="M9 7V4.5A1.5 1.5 0 0 1 10.5 3h3A1.5 1.5 0 0 1 15 4.5V7"
+                                    stroke="currentColor"
+                                    strokeWidth="2"
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                  />
+                                  <path
+                                    d="M6 7l1 13a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-13"
+                                    stroke="currentColor"
+                                    strokeWidth="2"
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                  />
+                                </svg>
+                              </button>
+                            </div>
+                          ) : null}
+                        </div>
+                      );
+                    })
+                  )}
+
+                  {!isLoadingSubscriptions && !showAddSubscriptionForm ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSubscriptionError(null);
+                        setShowAddSubscriptionForm(true);
+                      }}
+                      className="flex min-h-[104px] flex-col items-center justify-center gap-1 rounded-[24px] border border-dashed border-[color:var(--border)] text-sm font-semibold text-[color:var(--accent-strong)] transition hover:bg-[color:var(--surface-strong)]"
+                    >
+                      <span className="text-xl leading-none">+</span>
+                      <span>Add</span>
+                    </button>
+                  ) : null}
+                </div>
+
+                {showAddSubscriptionForm ? (
+                  <form
+                    onSubmit={handleCreateSubscription}
+                    className="mt-4 space-y-3 rounded-[24px] border border-dashed border-[color:var(--border)] p-4"
+                  >
+                    <div className="flex flex-wrap items-center gap-2">
+                      <input
+                        value={newSubscriptionName}
+                        onChange={(event) => setNewSubscriptionName(event.target.value)}
+                        placeholder="Subscription name"
+                        autoFocus
+                        aria-label="Subscription name"
+                        className="min-w-0 flex-1 basis-[140px] rounded-full border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-sm text-[color:var(--foreground)] outline-none"
+                      />
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={newSubscriptionAmount}
+                        onChange={(event) => setNewSubscriptionAmount(event.target.value)}
+                        placeholder="Amount"
+                        aria-label="Amount"
+                        className="min-w-0 max-w-[110px] flex-1 rounded-full border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-sm text-[color:var(--foreground)] outline-none"
+                      />
+                      <select
+                        value={newSubscriptionCycle}
+                        onChange={(event) => setNewSubscriptionCycle(event.target.value as SubscriptionBillingCycle)}
+                        aria-label="Billing cycle"
+                        className="min-w-0 flex-1 rounded-full border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-sm text-[color:var(--foreground)] outline-none"
+                      >
+                        {SUBSCRIPTION_BILLING_CYCLES.map((cycle) => (
+                          <option key={cycle} value={cycle}>
+                            {cycle}
+                          </option>
+                        ))}
+                      </select>
+                      {newSubscriptionCycle === 'Weekly' ? (
+                        <select
+                          value={newSubscriptionRenewalWeekday}
+                          onChange={(event) => setNewSubscriptionRenewalWeekday(event.target.value)}
+                          aria-label="Renewal day of week"
+                          className="min-w-0 flex-1 rounded-full border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-sm text-[color:var(--foreground)] outline-none"
+                        >
+                          {SUBSCRIPTION_WEEKDAYS.map((label, weekdayIndex) => (
+                            <option key={label} value={weekdayIndex}>
+                              {label}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <>
+                          {newSubscriptionCycle === 'Yearly' ? (
+                            <select
+                              value={newSubscriptionRenewalMonth}
+                              onChange={(event) => setNewSubscriptionRenewalMonth(event.target.value)}
+                              aria-label="Renewal month"
+                              className="min-w-0 flex-1 rounded-full border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-sm text-[color:var(--foreground)] outline-none"
+                            >
+                              {monthNamesShort.map((label, monthIndex) => (
+                                <option key={label} value={monthIndex + 1}>
+                                  {label}
+                                </option>
+                              ))}
+                            </select>
+                          ) : null}
+                          <input
+                            type="number"
+                            min="1"
+                            max="31"
+                            step="1"
+                            value={newSubscriptionRenewalDay}
+                            onChange={(event) => setNewSubscriptionRenewalDay(event.target.value)}
+                            placeholder="Renewal day"
+                            aria-label="Renewal day"
+                            className="min-w-0 max-w-[110px] flex-1 rounded-full border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-sm text-[color:var(--foreground)] outline-none"
+                          />
+                        </>
+                      )}
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-[11px] font-semibold uppercase tracking-[0.24em] text-[color:var(--muted)]">Color</span>
+                      {cardColorOptions.map((option) => {
+                        const isColorActive = newSubscriptionColor === option.id;
+                        return (
+                          <button
+                            key={option.id}
+                            type="button"
+                            aria-label={`Use ${option.label} color`}
+                            onClick={() => setNewSubscriptionColor(option.id)}
+                            className={`h-6 w-6 rounded-full border transition ${
+                              isColorActive ? 'scale-110 border-[color:var(--foreground)]' : 'border-[color:var(--border)]'
+                            }`}
+                            style={{ backgroundColor: option.swatch }}
+                          />
+                        );
+                      })}
+                    </div>
+
+                    <div
+                      className="rounded-[16px] p-3 text-sm font-semibold text-white"
+                      style={{
+                        background: `linear-gradient(135deg, ${
+                          (cardColorOptions.find((option) => option.id === newSubscriptionColor) ?? cardColorOptions[0]).from
+                        } 0%, ${(cardColorOptions.find((option) => option.id === newSubscriptionColor) ?? cardColorOptions[0]).to} 100%)`,
+                      }}
+                    >
+                      {newSubscriptionName.trim() || 'Subscription preview'}
+                    </div>
+
+                    {subscriptionError ? <p className="text-xs font-medium text-red-500">{subscriptionError}</p> : null}
+
+                    <div className="flex justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowAddSubscriptionForm(false);
+                          setSubscriptionError(null);
+                        }}
+                        className="rounded-full border border-[color:var(--border)] px-3 py-1.5 text-xs font-semibold text-[color:var(--muted)] transition hover:bg-[color:var(--surface-strong)]"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={isSavingSubscription}
+                        className="rounded-full bg-[color:var(--accent)] px-4 py-1.5 text-xs font-semibold text-[color:var(--accent-contrast)] transition hover:bg-[color:var(--accent-strong)] disabled:opacity-70"
+                      >
+                        {isSavingSubscription ? 'Adding…' : 'Add subscription'}
+                      </button>
+                    </div>
+                  </form>
+                ) : null}
+              </section>
+              </DraggableWidget>
+
               <DraggableWidget id="loans" key="loans">
               <section className="rounded-[30px] border border-[color:var(--border)] bg-[color:var(--surface)] p-5 shadow-[var(--shadow-soft)]">
                 <div className="flex items-center justify-between gap-2">
@@ -10518,6 +11994,289 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
               </DraggableWidget>
             </WidgetGrid>
           </main>
+        ) : activeView === 'books' ? (
+          <main className="space-y-6">
+            <section
+              className="relative overflow-hidden rounded-[36px] border border-[color:var(--border)] p-6 shadow-[var(--shadow)]"
+              style={{ background: 'linear-gradient(135deg, var(--surface-strong) 0%, var(--surface) 100%)' }}
+            >
+              <div className="relative z-10 flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+                <div className="flex items-center gap-5">
+                  <ThemeOrb theme={theme} className="h-20 w-20 sm:h-28 sm:w-28 lg:h-[120px] lg:w-[120px]" />
+                  <div>
+                    <p className="text-sm font-semibold uppercase tracking-[0.24em] text-[color:var(--accent)]">Reading</p>
+                    <h2 className="mt-3 text-4xl font-semibold tracking-tight text-[color:var(--foreground)]" style={{ fontFamily: 'var(--font-display)' }}>
+                      Books
+                    </h2>
+                    <p className="mt-4 max-w-2xl text-sm leading-6 text-[color:var(--muted)]">
+                      Keep track of what you&apos;re reading, what&apos;s next, and what you&apos;ve finished.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 rounded-full bg-[color:var(--surface-soft)] px-4 py-2 text-sm font-medium text-[color:var(--accent-strong)] shadow-[var(--shadow-soft)]">
+                  <span className="h-1.5 w-1.5 rounded-full bg-[color:var(--accent)]" />
+                  <span className="tabular-nums">{formatFloridaTime(now)}</span>
+                  <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[color:var(--muted)]">ET</span>
+                </div>
+              </div>
+            </section>
+
+            <EditLayoutControls layout={widgetLayout} />
+
+            <div className="flex gap-3 overflow-x-auto pb-2">
+              {weekDays.map((day) => {
+                const isActive = selectedDay === day.key;
+                return (
+                  <button
+                    key={day.key}
+                    type="button"
+                    onClick={() => setSelectedDay(day.key)}
+                    className={`min-w-[78px] flex-1 rounded-[22px] border px-3 py-2 text-center text-sm transition ${
+                      isActive
+                        ? 'border-[color:var(--accent)] bg-[color:var(--accent-soft)] text-[color:var(--accent-strong)]'
+                        : 'border-[color:var(--border)] bg-[color:var(--surface-soft)] text-[color:var(--muted)]'
+                    }`}
+                  >
+                    <p className="font-semibold">{day.label}</p>
+                    <p className="mt-1 text-xs">{day.dateNumber}</p>
+                  </button>
+                );
+              })}
+            </div>
+
+            <WidgetGrid className="grid gap-6" order={widgetLayout.order} isEditing={widgetLayout.isEditing} onReorder={widgetLayout.moveWidget}>
+              <DraggableWidget id="books" key="books">
+              <section className="rounded-[34px] border border-[color:var(--border)] bg-[color:var(--surface)] p-5 shadow-[var(--shadow-soft)]">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-lg font-semibold text-[color:var(--foreground)]" style={{ fontFamily: 'var(--font-display)' }}>
+                    Books
+                  </h3>
+                  <span className="rounded-full bg-[color:var(--accent-soft)] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em] text-[color:var(--accent-strong)]">
+                    {books.length} {books.length === 1 ? 'book' : 'books'}
+                  </span>
+                </div>
+
+                {bookError ? <p className="mt-3 text-sm text-[#dc2626]">{bookError}</p> : null}
+
+                {isLoadingBooks ? (
+                  <p className="mt-4 text-sm text-[color:var(--muted)]">Loading books…</p>
+                ) : (
+                  <>
+                    <div className="mt-5">
+                      <h4 className="text-sm font-semibold uppercase tracking-[0.24em] text-[color:var(--muted)]">📚 Currently Reading</h4>
+                      {currentlyReadingBooks.length === 0 ? (
+                        <p className="mt-3 text-sm text-[color:var(--muted)]">Nothing in progress — start a book below.</p>
+                      ) : (
+                        <div className="mt-3 space-y-3">{currentlyReadingBooks.map(renderBookRow)}</div>
+                      )}
+                    </div>
+
+                    <div className="mt-6">
+                      <h4 className="text-sm font-semibold uppercase tracking-[0.24em] text-[color:var(--muted)]">✅ Finished</h4>
+                      {finishedBooks.length === 0 ? (
+                        <p className="mt-3 text-sm text-[color:var(--muted)]">No finished books yet.</p>
+                      ) : (
+                        <div className="mt-3 space-y-3">{finishedBooks.map(renderBookRow)}</div>
+                      )}
+                    </div>
+
+                    <div className="mt-6">
+                      <h4 className="text-sm font-semibold uppercase tracking-[0.24em] text-[color:var(--muted)]">Want to Read</h4>
+                      {wantToReadBooks.length === 0 ? (
+                        <p className="mt-3 text-sm text-[color:var(--muted)]">Your to-read list is empty.</p>
+                      ) : (
+                        <div className="mt-3 space-y-2">
+                          {wantToReadBooks.map((book) => {
+                            const isEditingThisBook = editingBookId === book.id;
+                            const isDeletingThisBook = deletingBookId === book.id;
+                            if (isEditingThisBook || isDeletingThisBook) {
+                              return renderBookRow(book);
+                            }
+                            return (
+                              <div
+                                key={book.id}
+                                className="flex items-center justify-between gap-2 rounded-[18px] border border-[color:var(--border)] bg-[color:var(--surface-soft)] px-3 py-2"
+                              >
+                                <div className="min-w-0">
+                                  <p className="truncate text-sm font-semibold text-[color:var(--foreground)]">{book.title}</p>
+                                  {book.author ? <p className="truncate text-xs text-[color:var(--muted)]">{book.author}</p> : null}
+                                  {book.genre ? (
+                                    <span className="mt-1 inline-block rounded-full bg-[color:var(--accent-soft)] px-2 py-0.5 text-[10px] font-semibold text-[color:var(--accent-strong)]">
+                                      {book.genre}
+                                    </span>
+                                  ) : null}
+                                </div>
+                                <div className="flex shrink-0 items-center gap-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleStartEditBook(book)}
+                                    aria-label="Edit book"
+                                    className="rounded-full p-1.5 text-[color:var(--muted)] transition hover:bg-[color:var(--surface-strong)] hover:text-[color:var(--accent-strong)]"
+                                  >
+                                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                      <path
+                                        d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"
+                                        stroke="currentColor"
+                                        strokeWidth="2"
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                      />
+                                    </svg>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleStartDeleteBook(book.id)}
+                                    aria-label="Delete book"
+                                    className="rounded-full p-1.5 text-[color:var(--muted)] transition hover:bg-[color:var(--surface-strong)] hover:text-[color:var(--accent-strong)]"
+                                  >
+                                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                      <path d="M4 7h16" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                                      <path
+                                        d="M9 7V4.5A1.5 1.5 0 0 1 10.5 3h3A1.5 1.5 0 0 1 15 4.5V7"
+                                        stroke="currentColor"
+                                        strokeWidth="2"
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                      />
+                                      <path
+                                        d="M6 7l1 13a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-13"
+                                        stroke="currentColor"
+                                        strokeWidth="2"
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                      />
+                                    </svg>
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
+
+                {showAddBookForm ? (
+                  <form
+                    onSubmit={handleCreateBook}
+                    className="mt-6 space-y-2 rounded-[24px] border border-dashed border-[color:var(--border)] p-4"
+                  >
+                    <div className="flex flex-wrap items-center gap-2">
+                      <input
+                        value={newBookTitle}
+                        onChange={(event) => setNewBookTitle(event.target.value)}
+                        placeholder="Title"
+                        autoFocus
+                        aria-label="Book title"
+                        className="min-w-0 flex-1 basis-[160px] rounded-full border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-sm text-[color:var(--foreground)] outline-none"
+                      />
+                      <input
+                        value={newBookAuthor}
+                        onChange={(event) => setNewBookAuthor(event.target.value)}
+                        placeholder="Author (optional)"
+                        aria-label="Author"
+                        className="min-w-0 flex-1 basis-[160px] rounded-full border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-sm text-[color:var(--foreground)] outline-none"
+                      />
+                      <input
+                        value={newBookGenre}
+                        onChange={(event) => setNewBookGenre(event.target.value)}
+                        placeholder="Genre (optional)"
+                        aria-label="Genre"
+                        className="min-w-0 flex-1 basis-[160px] rounded-full border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-sm text-[color:var(--foreground)] outline-none"
+                      />
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      <select
+                        value={newBookStatus}
+                        onChange={(event) => setNewBookStatus(event.target.value as BookStatus)}
+                        aria-label="Status"
+                        className="min-w-0 flex-1 rounded-full border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-sm text-[color:var(--foreground)] outline-none"
+                      >
+                        {BOOK_STATUSES.map((status) => (
+                          <option key={status} value={status}>
+                            {status}
+                          </option>
+                        ))}
+                      </select>
+                      {newBookStatus === 'Currently Reading' || newBookStatus === 'Finished' ? (
+                        <input
+                          type="number"
+                          min="1"
+                          step="1"
+                          value={newBookTotalPages}
+                          onChange={(event) => setNewBookTotalPages(event.target.value)}
+                          placeholder="Total pages"
+                          aria-label="Total pages"
+                          className="min-w-0 max-w-[130px] flex-1 rounded-full border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-sm text-[color:var(--foreground)] outline-none"
+                        />
+                      ) : null}
+                      {newBookStatus === 'Finished' ? (
+                        <input
+                          type="date"
+                          value={newBookFinishedDate}
+                          onChange={(event) => setNewBookFinishedDate(event.target.value)}
+                          aria-label="Finished date"
+                          className="min-w-0 flex-1 rounded-full border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-sm text-[color:var(--foreground)] outline-none"
+                        />
+                      ) : null}
+                    </div>
+
+                    {newBookStatus === 'Finished' ? (
+                      <div className="flex items-center gap-1">
+                        {[1, 2, 3, 4, 5].map((star) => (
+                          <button
+                            key={star}
+                            type="button"
+                            onClick={() => setNewBookRating(star)}
+                            aria-label={`Set rating to ${star} star${star === 1 ? '' : 's'}`}
+                            className="text-[color:var(--accent)] transition hover:scale-110"
+                          >
+                            {renderStarIcon(star <= newBookRating)}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+
+                    {bookError ? <p className="text-xs font-medium text-red-500">{bookError}</p> : null}
+
+                    <div className="flex justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowAddBookForm(false);
+                          setBookError(null);
+                        }}
+                        className="rounded-full border border-[color:var(--border)] px-3 py-1.5 text-xs font-semibold text-[color:var(--muted)] transition hover:bg-[color:var(--surface-strong)]"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={isSavingBook}
+                        className="rounded-full bg-[color:var(--accent)] px-4 py-1.5 text-xs font-semibold text-[color:var(--accent-contrast)] transition hover:bg-[color:var(--accent-strong)] disabled:opacity-70"
+                      >
+                        {isSavingBook ? 'Adding…' : 'Add book'}
+                      </button>
+                    </div>
+                  </form>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBookError(null);
+                      setShowAddBookForm(true);
+                    }}
+                    className="mt-6 w-full rounded-[24px] border border-dashed border-[color:var(--border)] py-3 text-sm font-semibold text-[color:var(--muted)] transition hover:border-[color:var(--accent)] hover:text-[color:var(--accent-strong)]"
+                  >
+                    + Add book
+                  </button>
+                )}
+              </section>
+              </DraggableWidget>
+            </WidgetGrid>
+          </main>
         ) : (
           <main className="space-y-6">
             <section
@@ -10580,7 +12339,7 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
                 </div>
 
                 <div className="flex flex-wrap items-center gap-1 rounded-full border border-[color:var(--border)] bg-[color:var(--surface-soft)] p-1">
-                  {(['day', 'week', 'month', 'year', 'custom'] as const).map((period) => (
+                  {(['day', 'week', 'month', 'year', 'all', 'custom'] as const).map((period) => (
                     <button
                       key={period}
                       type="button"
@@ -10620,7 +12379,7 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
                     <span className="text-xs text-[color:var(--muted)]">Pick a start and end date to see spending.</span>
                   ) : null}
                 </div>
-              ) : (
+              ) : spendingPeriod === 'all' ? null : (
                 <div className="mt-5 flex items-center justify-center gap-4">
                   <button
                     type="button"
@@ -10656,6 +12415,98 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
             </section>
               </DraggableWidget>
 
+              <DraggableWidget id="incomeTracker" key="incomeTracker">
+              <section className="rounded-[34px] border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-[var(--shadow-soft)]">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    {widgetIcons[theme]}
+                    <p className="text-sm font-semibold uppercase tracking-[0.24em] text-[color:var(--muted)]">Income Tracker</p>
+                  </div>
+                  <span className="rounded-full bg-[color:var(--accent-soft)] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em] text-[color:var(--accent-strong)]">
+                    {formatCurrency(incomeTrendTotal)}
+                  </span>
+                </div>
+
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-0.5 rounded-full border border-[color:var(--border)] bg-[color:var(--surface-soft)] p-0.5 w-fit">
+                    {(['day', 'week', 'month', 'year', 'all'] as const).map((period) => (
+                      <button
+                        key={period}
+                        type="button"
+                        onClick={() => setIncomeTrendPeriod(period)}
+                        className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize transition ${
+                          incomeTrendPeriod === period
+                            ? 'bg-[color:var(--accent)] text-[color:var(--accent-contrast)]'
+                            : 'text-[color:var(--muted)] hover:bg-[color:var(--surface-strong)]'
+                        }`}
+                      >
+                        {period}
+                      </button>
+                    ))}
+                  </div>
+                  <ChartTypeToggle value={incomeChartType} onChange={setIncomeChartType} options={INCOME_CHART_TYPE_OPTIONS} />
+                </div>
+
+                {incomeTrendPeriod === 'all' ? null : (
+                  <div className="mt-2 flex items-center justify-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => setIncomeTrendAnchorDate((prev) => shiftAnchorDate(incomeTrendPeriod, prev, -1))}
+                      aria-label={`Previous ${incomeTrendPeriod}`}
+                      className="rounded-full px-1.5 py-0.5 text-xs text-[color:var(--muted)] transition hover:bg-[color:var(--surface-strong)]"
+                    >
+                      ‹
+                    </button>
+                    <span className="text-[11px] font-semibold text-[color:var(--foreground)]">
+                      {formatPeriodLabel(incomeTrendPeriod, incomeTrendAnchorDate)}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setIncomeTrendAnchorDate((prev) => shiftAnchorDate(incomeTrendPeriod, prev, 1))}
+                      aria-label={`Next ${incomeTrendPeriod}`}
+                      className="rounded-full px-1.5 py-0.5 text-xs text-[color:var(--muted)] transition hover:bg-[color:var(--surface-strong)]"
+                    >
+                      ›
+                    </button>
+                  </div>
+                )}
+
+                <div className="mt-3 flex flex-col items-center gap-2">
+                  {incomeChartType === 'pie' ? (
+                    incomeBySource.length === 0 ? (
+                      <p className="text-sm text-[color:var(--muted)]">
+                        {incomeTrendPeriod === 'all' ? 'No income logged yet.' : `No income this ${incomeTrendPeriod}.`}
+                      </p>
+                    ) : (
+                      <div className="relative mt-1 h-[280px] w-full">
+                        <canvas ref={incomeSourceChartCanvasRef} aria-label="Pie chart of income by source" role="img" />
+                      </div>
+                    )
+                  ) : incomeTrendHistory.length === 0 ? (
+                    <p className="text-sm text-[color:var(--muted)]">Log income transactions on the Finances page to start tracking your trend.</p>
+                  ) : filteredIncomeTrendHistory.length === 0 ? (
+                    <p className="text-sm text-[color:var(--muted)]">No income this {incomeTrendPeriod}.</p>
+                  ) : (
+                    <>
+                      <TrendChartCanvas
+                        history={filteredIncomeTrendHistory}
+                        type={incomeChartType}
+                        accent={themePalettes[theme].accent}
+                        accentStrong={themePalettes[theme].accentStrong}
+                        muted={themePalettes[theme].muted}
+                        border={themePalettes[theme].border}
+                        formatValue={(value) => formatCurrency(value)}
+                        formatDateLabel={(dayKey) => formatTrendDateLabel(dayKey, historySpansMultipleYears(filteredIncomeTrendHistory))}
+                      />
+                      {filteredIncomeTrendHistory.length === 1 ? (
+                        <p className="text-xs text-[color:var(--muted)]">Log another income transaction to see more of your trend.</p>
+                      ) : null}
+                    </>
+                  )}
+                </div>
+              </section>
+              </DraggableWidget>
+
               <DraggableWidget id="weightTrend" key="weightTrend">
               <section className="rounded-[34px] border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-[var(--shadow-soft)]">
                 <div className="flex items-center justify-between gap-2">
@@ -10670,26 +12521,68 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
                   ) : null}
                 </div>
 
-                <div className="mt-3 flex items-center justify-end">
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-0.5 rounded-full border border-[color:var(--border)] bg-[color:var(--surface-soft)] p-0.5 w-fit">
+                    {(['day', 'week', 'month', 'year', 'all'] as const).map((period) => (
+                      <button
+                        key={period}
+                        type="button"
+                        onClick={() => setWeightTrendPeriod(period)}
+                        className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize transition ${
+                          weightTrendPeriod === period
+                            ? 'bg-[color:var(--accent)] text-[color:var(--accent-contrast)]'
+                            : 'text-[color:var(--muted)] hover:bg-[color:var(--surface-strong)]'
+                        }`}
+                      >
+                        {period}
+                      </button>
+                    ))}
+                  </div>
                   <ChartTypeToggle value={weightChartType} onChange={setWeightChartType} options={TREND_CHART_TYPE_OPTIONS} />
                 </div>
+
+                {weightTrendPeriod === 'all' ? null : (
+                  <div className="mt-2 flex items-center justify-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => setWeightTrendAnchorDate((prev) => shiftAnchorDate(weightTrendPeriod, prev, -1))}
+                      aria-label={`Previous ${weightTrendPeriod}`}
+                      className="rounded-full px-1.5 py-0.5 text-xs text-[color:var(--muted)] transition hover:bg-[color:var(--surface-strong)]"
+                    >
+                      ‹
+                    </button>
+                    <span className="text-[11px] font-semibold text-[color:var(--foreground)]">
+                      {formatPeriodLabel(weightTrendPeriod, weightTrendAnchorDate)}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setWeightTrendAnchorDate((prev) => shiftAnchorDate(weightTrendPeriod, prev, 1))}
+                      aria-label={`Next ${weightTrendPeriod}`}
+                      className="rounded-full px-1.5 py-0.5 text-xs text-[color:var(--muted)] transition hover:bg-[color:var(--surface-strong)]"
+                    >
+                      ›
+                    </button>
+                  </div>
+                )}
 
                 <div className="mt-3 flex flex-col items-center gap-2">
                   {weightHistory.length === 0 ? (
                     <p className="text-sm text-[color:var(--muted)]">Log a weigh-in on the Health &amp; Fitness page to start tracking your trend.</p>
+                  ) : filteredWeightTrendHistory.length === 0 ? (
+                    <p className="text-sm text-[color:var(--muted)]">No weight entries this {weightTrendPeriod}.</p>
                   ) : (
                     <>
                       <TrendChartCanvas
-                        history={weightTrendHistory}
+                        history={filteredWeightTrendHistory}
                         type={weightChartType}
                         accent={themePalettes[theme].accent}
                         accentStrong={themePalettes[theme].accentStrong}
                         muted={themePalettes[theme].muted}
                         border={themePalettes[theme].border}
                         formatValue={(value) => `${value} lbs`}
-                        formatDateLabel={formatShortDate}
+                        formatDateLabel={(dayKey) => formatTrendDateLabel(dayKey, historySpansMultipleYears(filteredWeightTrendHistory))}
                       />
-                      {weightHistory.length === 1 ? (
+                      {filteredWeightTrendHistory.length === 1 ? (
                         <p className="text-xs text-[color:var(--muted)]">Log another weigh-in to see more of your trend.</p>
                       ) : null}
                     </>
@@ -10712,17 +12605,59 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
                   ) : null}
                 </div>
 
-                <div className="mt-3 flex items-center justify-end">
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-0.5 rounded-full border border-[color:var(--border)] bg-[color:var(--surface-soft)] p-0.5 w-fit">
+                    {(['day', 'week', 'month', 'year', 'all'] as const).map((period) => (
+                      <button
+                        key={period}
+                        type="button"
+                        onClick={() => setStepsTrendPeriod(period)}
+                        className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize transition ${
+                          stepsTrendPeriod === period
+                            ? 'bg-[color:var(--accent)] text-[color:var(--accent-contrast)]'
+                            : 'text-[color:var(--muted)] hover:bg-[color:var(--surface-strong)]'
+                        }`}
+                      >
+                        {period}
+                      </button>
+                    ))}
+                  </div>
                   <ChartTypeToggle value={stepsChartType} onChange={setStepsChartType} options={TREND_CHART_TYPE_OPTIONS} />
                 </div>
+
+                {stepsTrendPeriod === 'all' ? null : (
+                  <div className="mt-2 flex items-center justify-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => setStepsTrendAnchorDate((prev) => shiftAnchorDate(stepsTrendPeriod, prev, -1))}
+                      aria-label={`Previous ${stepsTrendPeriod}`}
+                      className="rounded-full px-1.5 py-0.5 text-xs text-[color:var(--muted)] transition hover:bg-[color:var(--surface-strong)]"
+                    >
+                      ‹
+                    </button>
+                    <span className="text-[11px] font-semibold text-[color:var(--foreground)]">
+                      {formatPeriodLabel(stepsTrendPeriod, stepsTrendAnchorDate)}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setStepsTrendAnchorDate((prev) => shiftAnchorDate(stepsTrendPeriod, prev, 1))}
+                      aria-label={`Next ${stepsTrendPeriod}`}
+                      className="rounded-full px-1.5 py-0.5 text-xs text-[color:var(--muted)] transition hover:bg-[color:var(--surface-strong)]"
+                    >
+                      ›
+                    </button>
+                  </div>
+                )}
 
                 <div className="mt-3 flex flex-col items-center gap-2">
                   {stepsHistory.length === 0 ? (
                     <p className="text-sm text-[color:var(--muted)]">Log your steps on the Health &amp; Fitness page to start tracking your trend.</p>
+                  ) : filteredStepsTrendHistory.length === 0 ? (
+                    <p className="text-sm text-[color:var(--muted)]">No step entries this {stepsTrendPeriod}.</p>
                   ) : (
                     <>
                       <TrendChartCanvas
-                        history={stepsTrendHistory}
+                        history={filteredStepsTrendHistory}
                         type={stepsChartType}
                         goalValue={STEPS_GOAL}
                         accent={themePalettes[theme].accent}
@@ -10730,9 +12665,9 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
                         muted={themePalettes[theme].muted}
                         border={themePalettes[theme].border}
                         formatValue={formatStepsCount}
-                        formatDateLabel={formatShortDate}
+                        formatDateLabel={(dayKey) => formatTrendDateLabel(dayKey, historySpansMultipleYears(filteredStepsTrendHistory))}
                       />
-                      {stepsHistory.length === 1 ? (
+                      {filteredStepsTrendHistory.length === 1 ? (
                         <p className="text-xs text-[color:var(--muted)]">Log another day to see more of your trend.</p>
                       ) : null}
                     </>
@@ -10755,17 +12690,59 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
                   ) : null}
                 </div>
 
-                <div className="mt-3 flex items-center justify-end">
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-0.5 rounded-full border border-[color:var(--border)] bg-[color:var(--surface-soft)] p-0.5 w-fit">
+                    {(['day', 'week', 'month', 'year', 'all'] as const).map((period) => (
+                      <button
+                        key={period}
+                        type="button"
+                        onClick={() => setWaterTrendPeriod(period)}
+                        className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize transition ${
+                          waterTrendPeriod === period
+                            ? 'bg-[color:var(--accent)] text-[color:var(--accent-contrast)]'
+                            : 'text-[color:var(--muted)] hover:bg-[color:var(--surface-strong)]'
+                        }`}
+                      >
+                        {period}
+                      </button>
+                    ))}
+                  </div>
                   <ChartTypeToggle value={waterChartType} onChange={setWaterChartType} options={TREND_CHART_TYPE_OPTIONS} />
                 </div>
+
+                {waterTrendPeriod === 'all' ? null : (
+                  <div className="mt-2 flex items-center justify-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => setWaterTrendAnchorDate((prev) => shiftAnchorDate(waterTrendPeriod, prev, -1))}
+                      aria-label={`Previous ${waterTrendPeriod}`}
+                      className="rounded-full px-1.5 py-0.5 text-xs text-[color:var(--muted)] transition hover:bg-[color:var(--surface-strong)]"
+                    >
+                      ‹
+                    </button>
+                    <span className="text-[11px] font-semibold text-[color:var(--foreground)]">
+                      {formatPeriodLabel(waterTrendPeriod, waterTrendAnchorDate)}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setWaterTrendAnchorDate((prev) => shiftAnchorDate(waterTrendPeriod, prev, 1))}
+                      aria-label={`Next ${waterTrendPeriod}`}
+                      className="rounded-full px-1.5 py-0.5 text-xs text-[color:var(--muted)] transition hover:bg-[color:var(--surface-strong)]"
+                    >
+                      ›
+                    </button>
+                  </div>
+                )}
 
                 <div className="mt-3 flex flex-col items-center gap-2">
                   {waterHistory.length === 0 ? (
                     <p className="text-sm text-[color:var(--muted)]">Log your water on the Health &amp; Fitness page to start tracking your trend.</p>
+                  ) : filteredWaterTrendHistory.length === 0 ? (
+                    <p className="text-sm text-[color:var(--muted)]">No water entries this {waterTrendPeriod}.</p>
                   ) : (
                     <>
                       <TrendChartCanvas
-                        history={waterTrendHistory}
+                        history={filteredWaterTrendHistory}
                         type={waterChartType}
                         goalValue={waterGoal}
                         accent={themePalettes[theme].accent}
@@ -10773,9 +12750,9 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
                         muted={themePalettes[theme].muted}
                         border={themePalettes[theme].border}
                         formatValue={(value) => `${value} oz`}
-                        formatDateLabel={formatShortDate}
+                        formatDateLabel={(dayKey) => formatTrendDateLabel(dayKey, historySpansMultipleYears(filteredWaterTrendHistory))}
                       />
-                      {waterHistory.length === 1 ? (
+                      {filteredWaterTrendHistory.length === 1 ? (
                         <p className="text-xs text-[color:var(--muted)]">Log another day to see more of your trend.</p>
                       ) : null}
                     </>
@@ -10798,17 +12775,59 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
                   ) : null}
                 </div>
 
-                <div className="mt-3 flex items-center justify-end">
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-0.5 rounded-full border border-[color:var(--border)] bg-[color:var(--surface-soft)] p-0.5 w-fit">
+                    {(['day', 'week', 'month', 'year', 'all'] as const).map((period) => (
+                      <button
+                        key={period}
+                        type="button"
+                        onClick={() => setSleepTrendPeriod(period)}
+                        className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize transition ${
+                          sleepTrendPeriod === period
+                            ? 'bg-[color:var(--accent)] text-[color:var(--accent-contrast)]'
+                            : 'text-[color:var(--muted)] hover:bg-[color:var(--surface-strong)]'
+                        }`}
+                      >
+                        {period}
+                      </button>
+                    ))}
+                  </div>
                   <ChartTypeToggle value={sleepChartType} onChange={setSleepChartType} options={TREND_CHART_TYPE_OPTIONS} />
                 </div>
+
+                {sleepTrendPeriod === 'all' ? null : (
+                  <div className="mt-2 flex items-center justify-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => setSleepTrendAnchorDate((prev) => shiftAnchorDate(sleepTrendPeriod, prev, -1))}
+                      aria-label={`Previous ${sleepTrendPeriod}`}
+                      className="rounded-full px-1.5 py-0.5 text-xs text-[color:var(--muted)] transition hover:bg-[color:var(--surface-strong)]"
+                    >
+                      ‹
+                    </button>
+                    <span className="text-[11px] font-semibold text-[color:var(--foreground)]">
+                      {formatPeriodLabel(sleepTrendPeriod, sleepTrendAnchorDate)}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setSleepTrendAnchorDate((prev) => shiftAnchorDate(sleepTrendPeriod, prev, 1))}
+                      aria-label={`Next ${sleepTrendPeriod}`}
+                      className="rounded-full px-1.5 py-0.5 text-xs text-[color:var(--muted)] transition hover:bg-[color:var(--surface-strong)]"
+                    >
+                      ›
+                    </button>
+                  </div>
+                )}
 
                 <div className="mt-3 flex flex-col items-center gap-2">
                   {sleepHistory.length === 0 ? (
                     <p className="text-sm text-[color:var(--muted)]">Log your sleep on the Health &amp; Fitness page to start tracking your trend.</p>
+                  ) : filteredSleepTrendHistory.length === 0 ? (
+                    <p className="text-sm text-[color:var(--muted)]">No sleep entries this {sleepTrendPeriod}.</p>
                   ) : (
                     <>
                       <TrendChartCanvas
-                        history={sleepTrendHistory}
+                        history={filteredSleepTrendHistory}
                         type={sleepChartType}
                         goalValue={SLEEP_GOAL}
                         accent={themePalettes[theme].accent}
@@ -10816,9 +12835,9 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
                         muted={themePalettes[theme].muted}
                         border={themePalettes[theme].border}
                         formatValue={formatSleepDuration}
-                        formatDateLabel={formatShortDate}
+                        formatDateLabel={(dayKey) => formatTrendDateLabel(dayKey, historySpansMultipleYears(filteredSleepTrendHistory))}
                       />
-                      {sleepHistory.length === 1 ? (
+                      {filteredSleepTrendHistory.length === 1 ? (
                         <p className="text-xs text-[color:var(--muted)]">Log another day to see more of your trend.</p>
                       ) : null}
                     </>
