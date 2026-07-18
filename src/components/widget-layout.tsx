@@ -175,7 +175,7 @@ export function DraggableWidget({
   return (
     <div
       data-widget-id={id}
-      className={`relative grid transition-shadow duration-150 ${className ?? ''} ${
+      className={`relative grid grid-cols-1 transition-shadow duration-150 ${className ?? ''} ${
         isDragging
           ? 'z-20 scale-[1.02] opacity-90 shadow-2xl'
           : isEditing

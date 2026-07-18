@@ -8,6 +8,8 @@ create table if not exists books (
   title text not null,
   author text,
   genre text,
+  description text,
+  cover_image_url text,
   status text not null default 'Want to Read',
   current_page integer,
   total_pages integer,

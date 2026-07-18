@@ -30,7 +30,7 @@ const WIDGET_DEFAULT_ORDER: Record<ViewMode, string[]> = {
   health: ['bmi', 'weightLog', 'stepsLog', 'waterIntake', 'sleep', 'exercise'],
   finances: ['balance', 'creditCards', 'subscriptions', 'loans', 'savings'],
   projects: ['projects'],
-  books: ['books'],
+  books: ['books', 'favoriteBooks'],
   analytics: ['spendingByCategory', 'incomeTracker', 'weightTrend', 'stepsTrend', 'waterTrend', 'sleepTrend'],
 };
 
@@ -193,11 +193,40 @@ type BookRow = {
   title: string;
   author: string | null;
   genre: string | null;
+  description: string | null;
+  cover_image_url: string | null;
   status: BookStatus;
   current_page: number | null;
   total_pages: number | null;
   rating: number | null;
   finished_date: string | null;
+};
+
+// Deterministic per-book gradient (falls back for the cover swatch when no cover image
+// has been uploaded), derived from the book id so it stays stable regardless of list order.
+const getBookGradient = (id: string): CardColorOption => {
+  let hash = 0;
+  for (let index = 0; index < id.length; index += 1) {
+    hash = (hash * 31 + id.charCodeAt(index)) % cardColorOptions.length;
+  }
+  return cardColorOptions[Math.abs(hash) % cardColorOptions.length];
+};
+
+const uploadBookCover = async (userId: string, file: File): Promise<{ url: string | null; error: string | null }> => {
+  const fileExt = file.name.split('.').pop() ?? 'jpg';
+  const filePath = `${userId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${fileExt}`;
+
+  const { error: uploadError } = await supabase.storage.from('book-covers').upload(filePath, file, {
+    cacheControl: '3600',
+    upsert: false,
+  });
+
+  if (uploadError) {
+    return { url: null, error: uploadError.message };
+  }
+
+  const { data } = supabase.storage.from('book-covers').getPublicUrl(filePath);
+  return { url: data.publicUrl, error: null };
 };
 
 type SubscriptionBillingCycle = 'Monthly' | 'Yearly' | 'Weekly';
@@ -1870,6 +1899,8 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
   const [newBookTitle, setNewBookTitle] = useState('');
   const [newBookAuthor, setNewBookAuthor] = useState('');
   const [newBookGenre, setNewBookGenre] = useState('');
+  const [newBookDescription, setNewBookDescription] = useState('');
+  const [newBookCoverFile, setNewBookCoverFile] = useState<File | null>(null);
   const [newBookStatus, setNewBookStatus] = useState<BookStatus>('Want to Read');
   const [newBookTotalPages, setNewBookTotalPages] = useState('');
   const [newBookRating, setNewBookRating] = useState(0);
@@ -1879,6 +1910,8 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
   const [editBookTitle, setEditBookTitle] = useState('');
   const [editBookAuthor, setEditBookAuthor] = useState('');
   const [editBookGenre, setEditBookGenre] = useState('');
+  const [editBookDescription, setEditBookDescription] = useState('');
+  const [editBookCoverFile, setEditBookCoverFile] = useState<File | null>(null);
   const [editBookStatus, setEditBookStatus] = useState<BookStatus>('Want to Read');
   const [editBookCurrentPage, setEditBookCurrentPage] = useState('');
   const [editBookTotalPages, setEditBookTotalPages] = useState('');
@@ -1887,6 +1920,7 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
   const [isSavingBookEdit, setIsSavingBookEdit] = useState(false);
   const [deletingBookId, setDeletingBookId] = useState<string | null>(null);
   const [isDeletingBook, setIsDeletingBook] = useState(false);
+  const [expandedBookId, setExpandedBookId] = useState<string | null>(null);
   const [isMarkingProjectComplete, setIsMarkingProjectComplete] = useState(false);
   const [newSubtaskTitleByProject, setNewSubtaskTitleByProject] = useState<Record<string, string>>({});
   const [isSavingSubtaskByProject, setIsSavingSubtaskByProject] = useState<Record<string, boolean>>({});
@@ -4861,12 +4895,26 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
 
     setIsSavingBook(true);
 
+    let coverImageUrl: string | null = null;
+    if (newBookCoverFile) {
+      const uploaded = await uploadBookCover(currentUserId, newBookCoverFile);
+      if (!uploaded.url) {
+        console.error('Unable to upload cover image:', uploaded.error);
+        setBookError(`Unable to upload that cover image (${uploaded.error}).`);
+        setIsSavingBook(false);
+        return;
+      }
+      coverImageUrl = uploaded.url;
+    }
+
     const { data, error } = await supabase
       .from('books')
       .insert({
         title: validated.title,
         author: newBookAuthor.trim() || null,
         genre: newBookGenre.trim() || null,
+        description: newBookDescription.trim() || null,
+        cover_image_url: coverImageUrl,
         status: validated.status,
         current_page: validated.currentPage,
         total_pages: validated.totalPages,
@@ -4885,6 +4933,8 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
       setNewBookTitle('');
       setNewBookAuthor('');
       setNewBookGenre('');
+      setNewBookDescription('');
+      setNewBookCoverFile(null);
       setNewBookStatus('Want to Read');
       setNewBookTotalPages('');
       setNewBookRating(0);
@@ -4897,10 +4947,13 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
 
   const handleStartEditBook = (book: BookRow) => {
     setDeletingBookId(null);
+    setExpandedBookId(null);
     setEditingBookId(book.id);
     setEditBookTitle(book.title);
     setEditBookAuthor(book.author ?? '');
     setEditBookGenre(book.genre ?? '');
+    setEditBookDescription(book.description ?? '');
+    setEditBookCoverFile(null);
     setEditBookStatus(book.status);
     setEditBookCurrentPage(book.current_page != null ? String(book.current_page) : '0');
     setEditBookTotalPages(book.total_pages != null ? String(book.total_pages) : '');
@@ -4930,17 +4983,36 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
       return;
     }
 
+    if (editBookCoverFile && !currentUserId) {
+      setBookError('Please sign in to upload a cover image.');
+      return;
+    }
+
     setIsSavingBookEdit(true);
+
+    let coverImageUrl: string | undefined;
+    if (editBookCoverFile && currentUserId) {
+      const uploaded = await uploadBookCover(currentUserId, editBookCoverFile);
+      if (!uploaded.url) {
+        console.error('Unable to upload cover image:', uploaded.error);
+        setBookError(`Unable to upload that cover image (${uploaded.error}).`);
+        setIsSavingBookEdit(false);
+        return;
+      }
+      coverImageUrl = uploaded.url;
+    }
 
     const updatedFields = {
       title: validated.title,
       author: editBookAuthor.trim() || null,
       genre: editBookGenre.trim() || null,
+      description: editBookDescription.trim() || null,
       status: validated.status,
       current_page: validated.currentPage,
       total_pages: validated.totalPages,
       rating: validated.rating,
       finished_date: validated.finishedDate,
+      ...(coverImageUrl ? { cover_image_url: coverImageUrl } : {}),
     };
 
     const { error } = await supabase.from('books').update(updatedFields).eq('id', id);
@@ -4951,6 +5023,7 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
     } else {
       setBooks((current) => current.map((row) => (row.id === id ? { ...row, ...updatedFields } : row)));
       setEditingBookId(null);
+      setEditBookCoverFile(null);
     }
 
     setIsSavingBookEdit(false);
@@ -4960,6 +5033,10 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
     setEditingBookId(null);
     setDeletingBookId(id);
     setBookError(null);
+  };
+
+  const handleToggleExpandBook = (id: string) => {
+    setExpandedBookId((current) => (current === id ? null : id));
   };
 
   const handleCancelDeleteBook = () => {
@@ -5000,6 +5077,7 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
   const wantToReadBooks = books.filter((book) => book.status === 'Want to Read');
   const currentlyReadingBooks = books.filter((book) => book.status === 'Currently Reading');
   const finishedBooks = books.filter((book) => book.status === 'Finished');
+  const favoriteBooks = books.filter((book) => book.rating === 5);
 
   const renderStarIcon = (filled: boolean) =>
     filled ? (
@@ -5020,10 +5098,23 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
   const renderBookRow = (book: BookRow) => {
     const isEditingThisBook = editingBookId === book.id;
     const isDeletingThisBook = deletingBookId === book.id;
+    const isExpanded = expandedBookId === book.id;
+    const gradient = getBookGradient(book.id);
     const progressPercent =
       book.total_pages && book.total_pages > 0
         ? Math.min(100, Math.round(((book.current_page ?? 0) / book.total_pages) * 100))
         : 0;
+    const coverSwatch = (
+      <div
+        className="h-28 w-20 shrink-0 overflow-hidden rounded-[14px]"
+        style={book.cover_image_url ? undefined : { background: `linear-gradient(135deg, ${gradient.from} 0%, ${gradient.to} 100%)` }}
+      >
+        {book.cover_image_url ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={book.cover_image_url} alt="" className="h-full w-full object-cover" />
+        ) : null}
+      </div>
+    );
 
     if (isDeletingThisBook) {
       return (
@@ -5080,6 +5171,26 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
               placeholder="Genre (optional)"
               aria-label="Genre"
               className="min-w-0 flex-1 basis-[140px] rounded-full border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-sm text-[color:var(--foreground)] outline-none"
+            />
+          </div>
+
+          <textarea
+            value={editBookDescription}
+            onChange={(event) => setEditBookDescription(event.target.value)}
+            placeholder="Description (optional)"
+            aria-label="Description"
+            rows={3}
+            className="w-full resize-none rounded-[16px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-sm text-[color:var(--foreground)] outline-none"
+          />
+
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="text-[11px] font-semibold uppercase tracking-[0.24em] text-[color:var(--muted)]">Cover image</label>
+            <input
+              type="file"
+              accept="image/*"
+              onChange={(event) => setEditBookCoverFile(event.target.files?.[0] ?? null)}
+              aria-label="Cover image"
+              className="min-w-0 flex-1 text-xs text-[color:var(--muted)] file:mr-2 file:rounded-full file:border-0 file:bg-[color:var(--accent-soft)] file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-[color:var(--accent-strong)]"
             />
           </div>
 
@@ -5174,97 +5285,138 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
         key={book.id}
         className="rounded-[20px] border border-[color:var(--border)] bg-[color:var(--surface-strong)] p-3 shadow-[var(--shadow-soft)]"
       >
-        <div className="flex items-start justify-between gap-2">
-          <div className="min-w-0">
-            <p className="truncate text-sm font-semibold text-[color:var(--foreground)]">{book.title}</p>
-            {book.author ? <p className="truncate text-xs text-[color:var(--muted)]">{book.author}</p> : null}
-            {book.genre ? (
-              <span className="mt-1 inline-block rounded-full bg-[color:var(--accent-soft)] px-2 py-0.5 text-[10px] font-semibold text-[color:var(--accent-strong)]">
-                {book.genre}
-              </span>
+        <div className="flex items-start gap-3">
+          {coverSwatch}
+          <div className="min-w-0 flex-1">
+            <div className="flex items-start justify-between gap-2">
+              {book.description ? (
+                <button
+                  type="button"
+                  onClick={() => handleToggleExpandBook(book.id)}
+                  aria-expanded={isExpanded}
+                  className="flex min-w-0 flex-1 items-start gap-1.5 text-left"
+                >
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-semibold text-[color:var(--foreground)]">{book.title}</p>
+                    {book.author ? <p className="truncate text-xs text-[color:var(--muted)]">{book.author}</p> : null}
+                    {book.genre ? (
+                      <span className="mt-1 inline-block rounded-full bg-[color:var(--accent-soft)] px-2 py-0.5 text-[10px] font-semibold text-[color:var(--accent-strong)]">
+                        {book.genre}
+                      </span>
+                    ) : null}
+                    <p className="mt-1 truncate text-xs italic text-[color:var(--muted)]">{book.description}</p>
+                  </div>
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    aria-hidden="true"
+                    className={`mt-1 shrink-0 text-[color:var(--muted)] transition-transform ${isExpanded ? 'rotate-180' : ''}`}
+                  >
+                    <path d="M6 9l6 6 6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </button>
+              ) : (
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-semibold text-[color:var(--foreground)]">{book.title}</p>
+                  {book.author ? <p className="truncate text-xs text-[color:var(--muted)]">{book.author}</p> : null}
+                  {book.genre ? (
+                    <span className="mt-1 inline-block rounded-full bg-[color:var(--accent-soft)] px-2 py-0.5 text-[10px] font-semibold text-[color:var(--accent-strong)]">
+                      {book.genre}
+                    </span>
+                  ) : null}
+                </div>
+              )}
+              <div className="flex shrink-0 items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => handleStartEditBook(book)}
+                  aria-label="Edit book"
+                  className="rounded-full p-1.5 text-[color:var(--muted)] transition hover:bg-[color:var(--surface-soft)] hover:text-[color:var(--accent-strong)]"
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <path
+                      d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleStartDeleteBook(book.id)}
+                  aria-label="Delete book"
+                  className="rounded-full p-1.5 text-[color:var(--muted)] transition hover:bg-[color:var(--surface-soft)] hover:text-[color:var(--accent-strong)]"
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <path d="M4 7h16" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                    <path
+                      d="M9 7V4.5A1.5 1.5 0 0 1 10.5 3h3A1.5 1.5 0 0 1 15 4.5V7"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                    <path
+                      d="M6 7l1 13a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-13"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </button>
+              </div>
+            </div>
+
+            {isExpanded && book.description ? (
+              <p className="mt-2 whitespace-pre-line rounded-[14px] bg-[color:var(--surface-soft)] p-3 text-xs leading-5 text-[color:var(--muted)]">
+                {book.description}
+              </p>
             ) : null}
-          </div>
-          <div className="flex shrink-0 items-center gap-1">
-            <button
-              type="button"
-              onClick={() => handleStartEditBook(book)}
-              aria-label="Edit book"
-              className="rounded-full p-1.5 text-[color:var(--muted)] transition hover:bg-[color:var(--surface-soft)] hover:text-[color:var(--accent-strong)]"
-            >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <path
-                  d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
-            </button>
-            <button
-              type="button"
-              onClick={() => handleStartDeleteBook(book.id)}
-              aria-label="Delete book"
-              className="rounded-full p-1.5 text-[color:var(--muted)] transition hover:bg-[color:var(--surface-soft)] hover:text-[color:var(--accent-strong)]"
-            >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <path d="M4 7h16" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                <path
-                  d="M9 7V4.5A1.5 1.5 0 0 1 10.5 3h3A1.5 1.5 0 0 1 15 4.5V7"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-                <path
-                  d="M6 7l1 13a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-13"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
-            </button>
+
+            {book.status === 'Currently Reading' ? (
+              <>
+                <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+                  <div
+                    className="h-1.5 rounded-full transition-[width]"
+                    style={{ width: `${progressPercent}%`, background: 'linear-gradient(90deg, #ffb199 0%, #ff6f91 100%)' }}
+                  />
+                </div>
+                <p className="mt-1.5 text-xs text-[color:var(--muted)]">
+                  {progressPercent}% · page {book.current_page ?? 0} of {book.total_pages ?? '?'}
+                </p>
+              </>
+            ) : null}
+
+            {book.status === 'Finished' ? (
+              <>
+                {book.finished_date ? (
+                  <p className="mt-2 text-xs text-[color:var(--muted)]">Finished {formatShortDate(book.finished_date)}</p>
+                ) : null}
+                {book.total_pages ? (
+                  <p className="mt-0.5 text-xs text-[color:var(--muted)]">{book.total_pages} pages</p>
+                ) : null}
+                <div className="mt-1.5 flex items-center gap-1">
+                  {[1, 2, 3, 4, 5].map((star) => (
+                    <button
+                      key={star}
+                      type="button"
+                      onClick={() => void handleSetBookRating(book, star)}
+                      aria-label={`Rate ${star} star${star === 1 ? '' : 's'}`}
+                      className="text-[color:var(--accent)] transition hover:scale-110"
+                    >
+                      {renderStarIcon(star <= (book.rating ?? 0))}
+                    </button>
+                  ))}
+                </div>
+              </>
+            ) : null}
           </div>
         </div>
-
-        {book.status === 'Currently Reading' ? (
-          <>
-            <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
-              <div
-                className="h-1.5 rounded-full transition-[width]"
-                style={{ width: `${progressPercent}%`, background: 'linear-gradient(90deg, #ffb199 0%, #ff6f91 100%)' }}
-              />
-            </div>
-            <p className="mt-1.5 text-xs text-[color:var(--muted)]">
-              {progressPercent}% · page {book.current_page ?? 0} of {book.total_pages ?? '?'}
-            </p>
-          </>
-        ) : null}
-
-        {book.status === 'Finished' ? (
-          <>
-            {book.finished_date ? (
-              <p className="mt-2 text-xs text-[color:var(--muted)]">Finished {formatShortDate(book.finished_date)}</p>
-            ) : null}
-            {book.total_pages ? (
-              <p className="mt-0.5 text-xs text-[color:var(--muted)]">{book.total_pages} pages</p>
-            ) : null}
-            <div className="mt-1.5 flex items-center gap-1">
-              {[1, 2, 3, 4, 5].map((star) => (
-                <button
-                  key={star}
-                  type="button"
-                  onClick={() => void handleSetBookRating(book, star)}
-                  aria-label={`Rate ${star} star${star === 1 ? '' : 's'}`}
-                  className="text-[color:var(--accent)] transition hover:scale-110"
-                >
-                  {renderStarIcon(star <= (book.rating ?? 0))}
-                </button>
-              ))}
-            </div>
-          </>
-        ) : null}
       </div>
     );
   };
@@ -12044,7 +12196,12 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
               })}
             </div>
 
-            <WidgetGrid className="grid gap-6" order={widgetLayout.order} isEditing={widgetLayout.isEditing} onReorder={widgetLayout.moveWidget}>
+            <WidgetGrid
+              className="grid w-full max-w-[860px] grid-cols-1 gap-6 sm:grid-cols-[4fr_3fr]"
+              order={widgetLayout.order}
+              isEditing={widgetLayout.isEditing}
+              onReorder={widgetLayout.moveWidget}
+            >
               <DraggableWidget id="books" key="books">
               <section className="rounded-[34px] border border-[color:var(--border)] bg-[color:var(--surface)] p-5 shadow-[var(--shadow-soft)]">
                 <div className="flex items-center justify-between">
@@ -12089,23 +12246,56 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
                           {wantToReadBooks.map((book) => {
                             const isEditingThisBook = editingBookId === book.id;
                             const isDeletingThisBook = deletingBookId === book.id;
-                            if (isEditingThisBook || isDeletingThisBook) {
+                            const isExpandedThisBook = expandedBookId === book.id;
+                            if (isEditingThisBook || isDeletingThisBook || isExpandedThisBook) {
                               return renderBookRow(book);
                             }
+                            const gradient = getBookGradient(book.id);
                             return (
                               <div
                                 key={book.id}
-                                className="flex items-center justify-between gap-2 rounded-[18px] border border-[color:var(--border)] bg-[color:var(--surface-soft)] px-3 py-2"
+                                className="flex items-start gap-3 rounded-[18px] border border-[color:var(--border)] bg-[color:var(--surface-soft)] p-3"
                               >
-                                <div className="min-w-0">
-                                  <p className="truncate text-sm font-semibold text-[color:var(--foreground)]">{book.title}</p>
-                                  {book.author ? <p className="truncate text-xs text-[color:var(--muted)]">{book.author}</p> : null}
-                                  {book.genre ? (
-                                    <span className="mt-1 inline-block rounded-full bg-[color:var(--accent-soft)] px-2 py-0.5 text-[10px] font-semibold text-[color:var(--accent-strong)]">
-                                      {book.genre}
-                                    </span>
+                                <div
+                                  className="h-28 w-20 shrink-0 overflow-hidden rounded-[14px]"
+                                  style={
+                                    book.cover_image_url
+                                      ? undefined
+                                      : { background: `linear-gradient(135deg, ${gradient.from} 0%, ${gradient.to} 100%)` }
+                                  }
+                                >
+                                  {book.cover_image_url ? (
+                                    // eslint-disable-next-line @next/next/no-img-element
+                                    <img src={book.cover_image_url} alt="" className="h-full w-full object-cover" />
                                   ) : null}
                                 </div>
+                                {book.description ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleToggleExpandBook(book.id)}
+                                    aria-expanded={isExpandedThisBook}
+                                    className="min-w-0 flex-1 text-left"
+                                  >
+                                    <p className="truncate text-sm font-semibold text-[color:var(--foreground)]">{book.title}</p>
+                                    {book.author ? <p className="truncate text-xs text-[color:var(--muted)]">{book.author}</p> : null}
+                                    {book.genre ? (
+                                      <span className="mt-1 inline-block rounded-full bg-[color:var(--accent-soft)] px-2 py-0.5 text-[10px] font-semibold text-[color:var(--accent-strong)]">
+                                        {book.genre}
+                                      </span>
+                                    ) : null}
+                                    <p className="mt-1 truncate text-xs italic text-[color:var(--muted)]">{book.description}</p>
+                                  </button>
+                                ) : (
+                                  <div className="min-w-0 flex-1">
+                                    <p className="truncate text-sm font-semibold text-[color:var(--foreground)]">{book.title}</p>
+                                    {book.author ? <p className="truncate text-xs text-[color:var(--muted)]">{book.author}</p> : null}
+                                    {book.genre ? (
+                                      <span className="mt-1 inline-block rounded-full bg-[color:var(--accent-soft)] px-2 py-0.5 text-[10px] font-semibold text-[color:var(--accent-strong)]">
+                                        {book.genre}
+                                      </span>
+                                    ) : null}
+                                  </div>
+                                )}
                                 <div className="flex shrink-0 items-center gap-1">
                                   <button
                                     type="button"
@@ -12184,6 +12374,26 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
                         placeholder="Genre (optional)"
                         aria-label="Genre"
                         className="min-w-0 flex-1 basis-[160px] rounded-full border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-sm text-[color:var(--foreground)] outline-none"
+                      />
+                    </div>
+
+                    <textarea
+                      value={newBookDescription}
+                      onChange={(event) => setNewBookDescription(event.target.value)}
+                      placeholder="Description (optional)"
+                      aria-label="Description"
+                      rows={3}
+                      className="w-full resize-none rounded-[16px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-sm text-[color:var(--foreground)] outline-none"
+                    />
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      <label className="text-[11px] font-semibold uppercase tracking-[0.24em] text-[color:var(--muted)]">Cover image</label>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={(event) => setNewBookCoverFile(event.target.files?.[0] ?? null)}
+                        aria-label="Cover image"
+                        className="min-w-0 flex-1 text-xs text-[color:var(--muted)] file:mr-2 file:rounded-full file:border-0 file:bg-[color:var(--accent-soft)] file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-[color:var(--accent-strong)]"
                       />
                     </div>
 
@@ -12272,6 +12482,52 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
                   >
                     + Add book
                   </button>
+                )}
+              </section>
+              </DraggableWidget>
+
+              <DraggableWidget id="favoriteBooks" key="favoriteBooks">
+              <section className="rounded-[34px] border border-[color:var(--border)] bg-[color:var(--surface)] p-5 shadow-[var(--shadow-soft)]">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-lg font-semibold text-[color:var(--foreground)]" style={{ fontFamily: 'var(--font-display)' }}>
+                    Favorites
+                  </h3>
+                  <span className="rounded-full bg-[color:var(--accent-soft)] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em] text-[color:var(--accent-strong)]">
+                    {favoriteBooks.length} {favoriteBooks.length === 1 ? 'book' : 'books'}
+                  </span>
+                </div>
+
+                {isLoadingBooks ? (
+                  <p className="mt-4 text-sm text-[color:var(--muted)]">Loading favorites…</p>
+                ) : favoriteBooks.length === 0 ? (
+                  <p className="mt-4 text-sm text-[color:var(--muted)]">Rate a finished book 5 stars to see it here.</p>
+                ) : (
+                  <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
+                    {favoriteBooks.map((book) => {
+                      const gradient = getBookGradient(book.id);
+                      return (
+                        <div key={book.id} className="flex flex-col items-center gap-1.5 text-center">
+                          <div
+                            className="h-28 w-20 overflow-hidden rounded-[14px] shadow-[var(--shadow-soft)]"
+                            style={
+                              book.cover_image_url
+                                ? undefined
+                                : { background: `linear-gradient(135deg, ${gradient.from} 0%, ${gradient.to} 100%)` }
+                            }
+                          >
+                            {book.cover_image_url ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img src={book.cover_image_url} alt="" className="h-full w-full object-cover" />
+                            ) : null}
+                          </div>
+                          <p className="w-full truncate text-xs font-semibold text-[color:var(--foreground)]">{book.title}</p>
+                          {book.author ? (
+                            <p className="w-full truncate text-[11px] text-[color:var(--muted)]">{book.author}</p>
+                          ) : null}
+                        </div>
+                      );
+                    })}
+                  </div>
                 )}
               </section>
               </DraggableWidget>
