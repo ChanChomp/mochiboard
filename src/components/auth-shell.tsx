@@ -224,102 +224,77 @@ export default function AuthShell({ mode }: { mode: AuthMode }) {
 
   return (
     <div className="min-h-screen bg-[color:var(--background)] text-[color:var(--foreground)]">
-      <div className="mx-auto flex min-h-screen max-w-6xl flex-col justify-center px-4 py-10 sm:px-6 lg:px-8">
-        <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-full border border-[color:var(--border)] bg-[color:var(--surface)]/80 px-4 py-3 shadow-[var(--shadow-soft)]">
-          <div className="flex items-center gap-2 text-sm font-semibold text-[color:var(--muted)]">
-            <span className="rounded-full bg-[color:var(--accent-soft)] px-2.5 py-1 text-[11px] uppercase tracking-[0.24em] text-[color:var(--accent-strong)]">mochiboard</span>
-            <span>{mode === 'login' ? 'Welcome back' : 'Create your account'}</span>
-          </div>
-          <div className="flex items-center gap-2 rounded-full border border-[color:var(--border)] bg-[color:var(--surface)]/80 px-3 py-2 shadow-[var(--shadow-soft)]">
-            {themeOptions.map((option) => {
-              const isActive = theme === option.id;
-              return (
-                <button
-                  key={option.id}
-                  type="button"
-                  aria-label={`Switch to ${option.label}`}
-                  onClick={() => handleThemeSelect(option.id)}
-                  className={`h-6 w-6 rounded-full border transition ${isActive ? 'scale-110 border-[color:var(--foreground)]' : 'border-[color:var(--border)]'}`}
-                  style={{ backgroundColor: option.swatch }}
-                />
-              );
-            })}
-          </div>
+      <div className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-4 py-10 sm:px-6">
+        <div className="mb-4 flex justify-center">
+          <span className="rounded-full bg-[color:var(--accent-soft)] px-2.5 py-1 text-[11px] uppercase tracking-[0.24em] text-[color:var(--accent-strong)]">mochiboard</span>
         </div>
 
-        <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
-          <section
-            className="rounded-[36px] border border-[color:var(--border)] p-8 shadow-[var(--shadow)]"
-            style={{ background: 'linear-gradient(135deg, var(--surface-strong) 0%, var(--surface) 100%)' }}
-          >
-            <p className="text-sm font-semibold uppercase tracking-[0.24em] text-[color:var(--accent)]">Sign in to your cozy planner</p>
-            <h1 className="mt-3 text-4xl font-semibold tracking-tight text-[color:var(--foreground)]" style={{ fontFamily: 'var(--font-display)' }}>
-              {mode === 'login' ? 'Come back to your little routine.' : 'Start your soft little planning ritual.'}
-            </h1>
-            <p className="mt-4 max-w-xl text-sm leading-6 text-[color:var(--muted)]">
-              Keep your week, tasks, and notes all in one warm, pastel home.
-            </p>
-            <div className="mt-8 rounded-[28px] border border-[color:var(--border)] bg-[color:var(--surface-soft)] p-5 text-sm text-[color:var(--muted)]">
-              <p className="font-semibold text-[color:var(--foreground)]">Why sign in?</p>
-              <ul className="mt-3 space-y-2">
-                <li>• Keep your planner tasks synced to Supabase</li>
-                <li>• Stay logged in across refreshes</li>
-                <li>• Access Dashboard and Planner from anywhere</li>
-              </ul>
-            </div>
-          </section>
-
-          <section className="rounded-[36px] border border-[color:var(--border)] bg-[color:var(--surface)] p-8 shadow-[var(--shadow-soft)]">
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div>
-                <label className="mb-2 block text-sm font-semibold text-[color:var(--foreground)]" htmlFor="email">
-                  Email
-                </label>
-                <input
-                  id="email"
-                  type="email"
-                  value={email}
-                  onChange={(event) => setEmail(event.target.value)}
-                  placeholder="you@example.com"
-                  required
-                  className="w-full rounded-full border border-[color:var(--border)] bg-[color:var(--surface-soft)] px-4 py-3 text-sm text-[color:var(--foreground)] outline-none"
-                />
-              </div>
-              <div>
-                <label className="mb-2 block text-sm font-semibold text-[color:var(--foreground)]" htmlFor="password">
-                  Password
-                </label>
-                <input
-                  id="password"
-                  type="password"
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                  placeholder="••••••••"
-                  required
-                  minLength={6}
-                  className="w-full rounded-full border border-[color:var(--border)] bg-[color:var(--surface-soft)] px-4 py-3 text-sm text-[color:var(--foreground)] outline-none"
-                />
-              </div>
-
-              {message ? <p className="rounded-[18px] border border-[color:var(--border)] bg-[color:var(--surface-soft)] px-3 py-3 text-sm text-[color:var(--accent-strong)]">{message}</p> : null}
-
+        <div className="mx-auto mb-6 flex items-center gap-2 rounded-full border border-[color:var(--border)] bg-[color:var(--surface)]/80 px-3 py-2 shadow-[var(--shadow-soft)]">
+          {themeOptions.map((option) => {
+            const isActive = theme === option.id;
+            return (
               <button
-                type="submit"
-                disabled={isSubmitting}
-                className="w-full rounded-full bg-[color:var(--accent)] px-4 py-3 text-sm font-semibold text-[color:var(--accent-contrast)] transition hover:bg-[color:var(--accent-strong)] disabled:opacity-70"
-              >
-                {isSubmitting ? 'Working…' : mode === 'login' ? 'Log in' : 'Create account'}
-              </button>
-            </form>
-
-            <p className="mt-5 text-sm text-[color:var(--muted)]">
-              {mode === 'login' ? "Need an account?" : 'Already have one?'}{' '}
-              <Link href={mode === 'login' ? '/signup' : '/login'} className="font-semibold text-[color:var(--accent-strong)]">
-                {mode === 'login' ? 'Create one' : 'Log in'}
-              </Link>
-            </p>
-          </section>
+                key={option.id}
+                type="button"
+                aria-label={`Switch to ${option.label}`}
+                onClick={() => handleThemeSelect(option.id)}
+                className={`h-6 w-6 rounded-full border transition ${isActive ? 'scale-110 border-[color:var(--foreground)]' : 'border-[color:var(--border)]'}`}
+                style={{ backgroundColor: option.swatch }}
+              />
+            );
+          })}
         </div>
+
+        <section className="rounded-[36px] border border-[color:var(--border)] bg-[color:var(--surface)] p-8 shadow-[var(--shadow-soft)]">
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div>
+              <label className="mb-2 block text-sm font-semibold text-[color:var(--foreground)]" htmlFor="email">
+                Email
+              </label>
+              <input
+                id="email"
+                type="email"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                placeholder="you@example.com"
+                required
+                className="w-full rounded-full border border-[color:var(--border)] bg-[color:var(--surface-soft)] px-4 py-3 text-sm text-[color:var(--foreground)] outline-none"
+              />
+            </div>
+            <div>
+              <label className="mb-2 block text-sm font-semibold text-[color:var(--foreground)]" htmlFor="password">
+                Password
+              </label>
+              <input
+                id="password"
+                type="password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                placeholder="••••••••"
+                required
+                minLength={6}
+                className="w-full rounded-full border border-[color:var(--border)] bg-[color:var(--surface-soft)] px-4 py-3 text-sm text-[color:var(--foreground)] outline-none"
+              />
+            </div>
+
+            {message ? <p className="rounded-[18px] border border-[color:var(--border)] bg-[color:var(--surface-soft)] px-3 py-3 text-sm text-[color:var(--accent-strong)]">{message}</p> : null}
+
+            <button
+              type="submit"
+              disabled={isSubmitting}
+              className="w-full rounded-full bg-[color:var(--accent)] px-4 py-3 text-sm font-semibold text-[color:var(--accent-contrast)] transition hover:bg-[color:var(--accent-strong)] disabled:opacity-70"
+            >
+              {isSubmitting ? 'Working…' : mode === 'login' ? 'Log in' : 'Create account'}
+            </button>
+          </form>
+
+          <p className="mt-5 text-sm text-[color:var(--muted)]">
+            {mode === 'login' ? "Need an account?" : 'Already have one?'}{' '}
+            <Link href={mode === 'login' ? '/signup' : '/login'} className="font-semibold text-[color:var(--accent-strong)]">
+              {mode === 'login' ? 'Create one' : 'Log in'}
+            </Link>
+          </p>
+        </section>
       </div>
 
       {showHackerModal ? <HackerTerminalModal onClose={() => setShowHackerModal(false)} /> : null}
