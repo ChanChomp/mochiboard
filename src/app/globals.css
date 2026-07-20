@@ -197,3 +197,18 @@ select {
 .water-wave-path {
   animation: water-wave-scroll 3s linear infinite;
 }
+
+@keyframes log-scroll {
+  from {
+    transform: translateY(0%);
+  }
+  to {
+    transform: translateY(-50%);
+  }
+}
+
+.log-rain-column {
+  animation-name: log-scroll;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+}

@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState, type FormEvent } from 'react';
 
+import HackerTerminalModal from '@/components/hacker-terminal-modal';
 import { supabase } from '@/lib/supabase';
 
 type AuthMode = 'login' | 'signup';
@@ -160,6 +161,7 @@ export default function AuthShell({ mode }: { mode: AuthMode }) {
   const [password, setPassword] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [showHackerModal, setShowHackerModal] = useState(false);
 
   useEffect(() => {
     const initialTheme = getStoredTheme();
@@ -177,6 +179,25 @@ export default function AuthShell({ mode }: { mode: AuthMode }) {
     event.preventDefault();
     setIsSubmitting(true);
     setMessage(null);
+
+    try {
+      const accessCheck = await fetch('/api/auth/check-access', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      });
+      const { authorized } = await accessCheck.json();
+
+      if (!authorized) {
+        setShowHackerModal(true);
+        setIsSubmitting(false);
+        return;
+      }
+    } catch {
+      setMessage('Something went wrong. Please try again.');
+      setIsSubmitting(false);
+      return;
+    }
 
     const action = mode === 'signup' ? supabase.auth.signUp({ email, password }) : supabase.auth.signInWithPassword({ email, password });
     const { data, error } = await action;
@@ -300,6 +321,8 @@ export default function AuthShell({ mode }: { mode: AuthMode }) {
           </section>
         </div>
       </div>
+
+      {showHackerModal ? <HackerTerminalModal onClose={() => setShowHackerModal(false)} /> : null}
     </div>
   );
 }
