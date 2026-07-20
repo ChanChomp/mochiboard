@@ -30,7 +30,7 @@ const WIDGET_DEFAULT_ORDER: Record<ViewMode, string[]> = {
   health: ['bmi', 'weightLog', 'stepsLog', 'waterIntake', 'sleep', 'exercise'],
   finances: ['balance', 'creditCards', 'subscriptions', 'loans', 'savings'],
   projects: ['projects'],
-  books: ['books', 'favoriteBooks'],
+  books: ['books', 'favoriteBooks', 'wantToRead'],
   analytics: ['spendingByCategory', 'incomeTracker', 'weightTrend', 'stepsTrend', 'waterTrend', 'sleepTrend'],
 };
 
@@ -140,6 +140,7 @@ type TransactionItemRow = {
   unit_price: number;
   quantity: number;
   item_total: number;
+  item_category: string | null;
 };
 
 type CreditCardRow = {
@@ -185,6 +186,83 @@ type SavingsGoalRow = {
 type BookStatus = 'Want to Read' | 'Currently Reading' | 'Finished';
 
 const BOOK_STATUSES: BookStatus[] = ['Want to Read', 'Currently Reading', 'Finished'];
+
+type BookSortOption = 'dateCompleted' | 'author';
+
+const BOOK_SORT_OPTIONS: { value: BookSortOption; label: string }[] = [
+  { value: 'dateCompleted', label: 'Date Completed' },
+  { value: 'author', label: 'Author' },
+];
+
+// "Last, First" is already last-name-first; otherwise assume "First Middle Last" and take
+// the final word. Falls back to the full string when there's nothing to split on.
+const getAuthorSortKey = (author: string | null): string => {
+  if (!author) {
+    return '';
+  }
+  const trimmed = author.trim();
+  if (!trimmed) {
+    return '';
+  }
+  if (trimmed.includes(',')) {
+    return trimmed.split(',')[0].trim().toLowerCase();
+  }
+  const parts = trimmed.split(/\s+/);
+  return (parts.length > 1 ? parts[parts.length - 1] : trimmed).toLowerCase();
+};
+
+const compareBooksByAuthor = (a: BookRow, b: BookRow): number => {
+  const aKey = getAuthorSortKey(a.author);
+  const bKey = getAuthorSortKey(b.author);
+  if (!aKey && !bKey) return 0;
+  if (!aKey) return 1;
+  if (!bKey) return -1;
+  return aKey.localeCompare(bKey);
+};
+
+const compareBooksByDateCompletedDesc = (a: BookRow, b: BookRow): number => {
+  const aDate = a.finished_date ?? '';
+  const bDate = b.finished_date ?? '';
+  if (!aDate && !bDate) return 0;
+  if (!aDate) return 1;
+  if (!bDate) return -1;
+  return bDate.localeCompare(aDate);
+};
+
+const sortBooks = (books: BookRow[], sort: BookSortOption): BookRow[] =>
+  [...books].sort(sort === 'author' ? compareBooksByAuthor : compareBooksByDateCompletedDesc);
+
+const ALL_AUTHORS_FILTER = 'all';
+
+// Collapses incidental formatting differences (stray whitespace, mismatched casing) so the
+// same author doesn't get treated as two different people.
+const normalizeAuthorName = (author: string | null | undefined): string | null => {
+  const trimmed = author?.trim().replace(/\s+/g, ' ');
+  return trimmed ? trimmed : null;
+};
+
+const authorMatchesFilter = (author: string | null, filterValue: string): boolean => {
+  const normalized = normalizeAuthorName(author);
+  return normalized !== null && normalized.toLowerCase() === filterValue.toLowerCase();
+};
+
+// Distinct author names present in a list, sorted the same way the list itself sorts by
+// author — grows automatically as books with new authors are added, no manual upkeep.
+// Dedupes case/whitespace variants of the same name down to a single entry.
+const getDistinctAuthors = (books: BookRow[]): string[] => {
+  const seen = new Map<string, string>();
+  books.forEach((book) => {
+    const normalized = normalizeAuthorName(book.author);
+    if (!normalized) {
+      return;
+    }
+    const key = normalized.toLowerCase();
+    if (!seen.has(key)) {
+      seen.set(key, normalized);
+    }
+  });
+  return Array.from(seen.values()).sort((a, b) => getAuthorSortKey(a).localeCompare(getAuthorSortKey(b)));
+};
 
 type BookRow = {
   id: string;
@@ -476,12 +554,17 @@ const transactionSubcategoryOptions: Record<string, string[]> = {
   'Health & Wellness': ['Medical/Insurance', 'Fitness', 'Wellness/Therapy', 'Other'],
   Entertainment: ['Streaming/Subscriptions', 'Movies/Events', 'Hobbies', 'Other'],
   Travel: ['Other'],
-  'Shopping/Misc': ['Other'],
+  'Shopping/Misc': ['Online Shopping', 'Other'],
   Financial: ['Loan/CC Payments', 'Savings Transfers', 'Other'],
   'Gifts & Donations': ['Other'],
   Subscriptions: ['Streaming', 'Software/Apps', 'Memberships', 'Other'],
   Income: ['Paycheck', 'Bonus', 'Refund', 'Gift', 'Interest/Dividends', 'Mobile payments', 'Other'],
 };
+
+const isAmazonOnlineShoppingTransaction = (entry: Pick<TransactionRow, 'category' | 'subcategory' | 'vendor'>): boolean =>
+  entry.category === 'Shopping/Misc' &&
+  entry.subcategory === 'Online Shopping' &&
+  (entry.vendor ?? '').trim().toLowerCase() === 'amazon';
 
 const workoutTypeIcons: Record<string, ReactElement> = {
   Cardio: (
@@ -553,6 +636,15 @@ const getStoredTransactionType = (): 'income' | 'expense' => {
 
   const storedValue = window.localStorage.getItem('mochiboard-transaction-type');
   return storedValue === 'income' ? 'income' : 'expense';
+};
+
+const getStoredBookSort = (key: string): BookSortOption => {
+  if (typeof window === 'undefined') {
+    return 'dateCompleted';
+  }
+
+  const storedValue = window.localStorage.getItem(key);
+  return storedValue === 'author' ? 'author' : 'dateCompleted';
 };
 
 const applyTheme = (theme: ThemeKey) => {
@@ -1755,10 +1847,12 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
   const [expandedTransactionId, setExpandedTransactionId] = useState<string | null>(null);
   const [newItemName, setNewItemName] = useState('');
   const [newItemPrice, setNewItemPrice] = useState('');
+  const [newItemCategory, setNewItemCategory] = useState('');
   const [isSavingItem, setIsSavingItem] = useState(false);
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [editItemName, setEditItemName] = useState('');
   const [editItemPrice, setEditItemPrice] = useState('');
+  const [editItemCategory, setEditItemCategory] = useState('');
   const [isSavingItemEdit, setIsSavingItemEdit] = useState(false);
   const [deletingItemId, setDeletingItemId] = useState<string | null>(null);
   const [isDeletingItem, setIsDeletingItem] = useState(false);
@@ -1921,6 +2015,17 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
   const [deletingBookId, setDeletingBookId] = useState<string | null>(null);
   const [isDeletingBook, setIsDeletingBook] = useState(false);
   const [expandedBookId, setExpandedBookId] = useState<string | null>(null);
+  const [finishedBooksSort, setFinishedBooksSort] = useState<BookSortOption>('dateCompleted');
+  const [finishedAuthorFilter, setFinishedAuthorFilter] = useState(ALL_AUTHORS_FILTER);
+  const [favoriteAuthorFilter, setFavoriteAuthorFilter] = useState(ALL_AUTHORS_FILTER);
+  const [wantToReadError, setWantToReadError] = useState<string | null>(null);
+  const [showAddWantToReadForm, setShowAddWantToReadForm] = useState(false);
+  const [wantToReadTitle, setWantToReadTitle] = useState('');
+  const [wantToReadAuthor, setWantToReadAuthor] = useState('');
+  const [wantToReadGenre, setWantToReadGenre] = useState('');
+  const [wantToReadDescription, setWantToReadDescription] = useState('');
+  const [wantToReadCoverFile, setWantToReadCoverFile] = useState<File | null>(null);
+  const [isSavingWantToReadBook, setIsSavingWantToReadBook] = useState(false);
   const [isMarkingProjectComplete, setIsMarkingProjectComplete] = useState(false);
   const [newSubtaskTitleByProject, setNewSubtaskTitleByProject] = useState<Record<string, string>>({});
   const [isSavingSubtaskByProject, setIsSavingSubtaskByProject] = useState<Record<string, boolean>>({});
@@ -1941,6 +2046,8 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
     setWaterGoalInput(String(storedWaterGoal));
 
     setNewTransactionType(getStoredTransactionType());
+
+    setFinishedBooksSort(getStoredBookSort('mochiboard-finished-books-sort'));
   }, []);
 
   const handleThemeSelect = (nextTheme: ThemeKey) => {
@@ -1952,6 +2059,11 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
   const handleSelectTransactionType = (nextType: 'income' | 'expense') => {
     setNewTransactionType(nextType);
     window.localStorage.setItem('mochiboard-transaction-type', nextType);
+  };
+
+  const handleSelectFinishedBooksSort = (nextSort: BookSortOption) => {
+    setFinishedBooksSort(nextSort);
+    window.localStorage.setItem('mochiboard-finished-books-sort', nextSort);
   };
 
   useEffect(() => {
@@ -3527,6 +3639,7 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
     setDeletingItemId(null);
     setNewItemName('');
     setNewItemPrice('');
+    setNewItemCategory('');
     setGasDetailsError(null);
     setGasPricePerGallonInput(willExpand && entry.price_per_gallon != null ? String(entry.price_per_gallon) : '');
     setGasGallonsInput(willExpand && entry.gallons != null ? String(entry.gallons) : '');
@@ -3594,6 +3707,9 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
       return;
     }
 
+    const parentTransaction = transactions.find((row) => row.id === transactionId);
+    const itemCategory = parentTransaction && isAmazonOnlineShoppingTransaction(parentTransaction) ? newItemCategory || null : null;
+
     setIsSavingItem(true);
 
     const { data, error } = await supabase
@@ -3604,6 +3720,7 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
         unit_price: price,
         quantity: 1,
         item_total: price,
+        item_category: itemCategory,
         user_id: currentUserId,
       })
       .select()
@@ -3616,6 +3733,7 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
       setTransactionItems((current) => [...current, data]);
       setNewItemName('');
       setNewItemPrice('');
+      setNewItemCategory('');
     }
 
     setIsSavingItem(false);
@@ -3626,6 +3744,7 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
     setEditingItemId(item.id);
     setEditItemName(item.item_name);
     setEditItemPrice(String(item.item_total));
+    setEditItemCategory(item.item_category ?? '');
   };
 
   const handleCancelEditItem = () => {
@@ -3648,11 +3767,15 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
       return;
     }
 
+    const editingItem = transactionItems.find((row) => row.id === id);
+    const parentTransaction = editingItem ? transactions.find((row) => row.id === editingItem.transaction_id) : undefined;
+    const itemCategory = parentTransaction && isAmazonOnlineShoppingTransaction(parentTransaction) ? editItemCategory || null : null;
+
     setIsSavingItemEdit(true);
 
     const { error } = await supabase
       .from('transaction_items')
-      .update({ item_name: itemName, unit_price: price, quantity: 1, item_total: price })
+      .update({ item_name: itemName, unit_price: price, quantity: 1, item_total: price, item_category: itemCategory })
       .eq('id', id);
 
     if (error) {
@@ -3660,7 +3783,9 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
       setItemError(`Unable to update that item (${error.message}).`);
     } else {
       setTransactionItems((current) =>
-        current.map((row) => (row.id === id ? { ...row, item_name: itemName, unit_price: price, quantity: 1, item_total: price } : row))
+        current.map((row) =>
+          row.id === id ? { ...row, item_name: itemName, unit_price: price, quantity: 1, item_total: price, item_category: itemCategory } : row
+        )
       );
       setEditingItemId(null);
     }
@@ -4945,6 +5070,69 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
     setIsSavingBook(false);
   };
 
+  const handleCreateWantToReadBook = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setWantToReadError(null);
+
+    if (!currentUserId) {
+      setWantToReadError('Please sign in to add a book.');
+      return;
+    }
+
+    const trimmedTitle = wantToReadTitle.trim();
+    if (!trimmedTitle) {
+      setWantToReadError('Enter a book title.');
+      return;
+    }
+
+    setIsSavingWantToReadBook(true);
+
+    let coverImageUrl: string | null = null;
+    if (wantToReadCoverFile) {
+      const uploaded = await uploadBookCover(currentUserId, wantToReadCoverFile);
+      if (!uploaded.url) {
+        console.error('Unable to upload cover image:', uploaded.error);
+        setWantToReadError(`Unable to upload that cover image (${uploaded.error}).`);
+        setIsSavingWantToReadBook(false);
+        return;
+      }
+      coverImageUrl = uploaded.url;
+    }
+
+    const { data, error } = await supabase
+      .from('books')
+      .insert({
+        title: trimmedTitle,
+        author: wantToReadAuthor.trim() || null,
+        genre: wantToReadGenre.trim() || null,
+        description: wantToReadDescription.trim() || null,
+        cover_image_url: coverImageUrl,
+        status: 'Want to Read',
+        current_page: null,
+        total_pages: null,
+        rating: null,
+        finished_date: null,
+        user_id: currentUserId,
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Unable to save book:', error);
+      setWantToReadError(`Unable to add that book (${error.message}).`);
+    } else if (data) {
+      setBooks((current) => [...current, data]);
+      setWantToReadTitle('');
+      setWantToReadAuthor('');
+      setWantToReadGenre('');
+      setWantToReadDescription('');
+      setWantToReadCoverFile(null);
+      setShowAddWantToReadForm(false);
+    }
+
+    setIsSavingWantToReadBook(false);
+  };
+
   const handleStartEditBook = (book: BookRow) => {
     setDeletingBookId(null);
     setExpandedBookId(null);
@@ -5078,6 +5266,18 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
   const currentlyReadingBooks = books.filter((book) => book.status === 'Currently Reading');
   const finishedBooks = books.filter((book) => book.status === 'Finished');
   const favoriteBooks = books.filter((book) => book.rating === 5);
+  const finishedAuthors = getDistinctAuthors(finishedBooks);
+  const favoriteAuthors = getDistinctAuthors(favoriteBooks);
+  const finishedBooksFiltered =
+    finishedAuthorFilter === ALL_AUTHORS_FILTER
+      ? finishedBooks
+      : finishedBooks.filter((book) => authorMatchesFilter(book.author, finishedAuthorFilter));
+  const favoriteBooksFiltered =
+    favoriteAuthorFilter === ALL_AUTHORS_FILTER
+      ? favoriteBooks
+      : favoriteBooks.filter((book) => authorMatchesFilter(book.author, favoriteAuthorFilter));
+  const finishedBooksSorted = sortBooks(finishedBooksFiltered, finishedBooksSort);
+  const favoriteBooksSorted = sortBooks(favoriteBooksFiltered, 'author');
 
   const renderStarIcon = (filled: boolean) =>
     filled ? (
@@ -10210,6 +10410,7 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
                       const isItemsExpanded = expandedTransactionId === entry.id;
                       const entryItems = transactionItems.filter((item) => item.transaction_id === entry.id);
                       const isGasTransaction = entry.category === 'Transportation' && entry.subcategory === 'Gas';
+                      const isAmazonItem = isAmazonOnlineShoppingTransaction(entry);
                       const hasItems = entryItems.length > 0;
                       const canExpand = isGasTransaction || hasItems;
                       const metaParts = [
@@ -10396,6 +10597,21 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
                                             aria-label="Item price"
                                             className="w-20 rounded-full border border-[color:var(--border)] bg-[color:var(--surface-soft)] px-3 py-1.5 text-xs text-[color:var(--foreground)] outline-none"
                                           />
+                                          {isAmazonItem ? (
+                                            <select
+                                              value={editItemCategory}
+                                              onChange={(event) => setEditItemCategory(event.target.value)}
+                                              aria-label="Item category"
+                                              className="min-w-0 flex-1 basis-[130px] rounded-full border border-[color:var(--border)] bg-[color:var(--surface-soft)] px-3 py-1.5 text-xs text-[color:var(--foreground)] outline-none"
+                                            >
+                                              <option value="">Category (optional)</option>
+                                              {TRANSACTION_CATEGORIES.map((cat) => (
+                                                <option key={cat} value={cat}>
+                                                  {cat}
+                                                </option>
+                                              ))}
+                                            </select>
+                                          ) : null}
                                           <button
                                             type="button"
                                             onClick={handleCancelEditItem}
@@ -10443,7 +10659,12 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
 
                                   return (
                                     <div key={item.id} className="flex items-center justify-between gap-2 rounded-[14px] bg-[color:var(--surface)] px-3 py-1.5">
-                                      <span className="truncate text-xs font-medium text-[color:var(--foreground)]">{item.item_name}</span>
+                                      <span className="min-w-0 truncate text-xs font-medium text-[color:var(--foreground)]">
+                                        {item.item_name}
+                                        {item.item_category ? (
+                                          <span className="ml-1.5 text-[10px] font-normal text-[color:var(--muted)]">· {item.item_category}</span>
+                                        ) : null}
+                                      </span>
                                       <div className="flex shrink-0 items-center gap-1.5">
                                         <span className="text-xs font-semibold tabular-nums text-[color:var(--foreground)]">
                                           {formatCurrency(item.item_total)}
@@ -10517,6 +10738,21 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
                                   aria-label="New item price"
                                   className="w-20 rounded-full border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-1.5 text-xs text-[color:var(--foreground)] outline-none"
                                 />
+                                {isAmazonItem ? (
+                                  <select
+                                    value={newItemCategory}
+                                    onChange={(event) => setNewItemCategory(event.target.value)}
+                                    aria-label="New item category"
+                                    className="min-w-0 flex-1 basis-[130px] rounded-full border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-1.5 text-xs text-[color:var(--foreground)] outline-none"
+                                  >
+                                    <option value="">Category (optional)</option>
+                                    {TRANSACTION_CATEGORIES.map((cat) => (
+                                      <option key={cat} value={cat}>
+                                        {cat}
+                                      </option>
+                                    ))}
+                                  </select>
+                                ) : null}
                                 <button
                                   type="submit"
                                   disabled={isSavingItem}
@@ -12197,7 +12433,7 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
             </div>
 
             <WidgetGrid
-              className="grid w-full max-w-[860px] grid-cols-1 gap-6 sm:grid-cols-[4fr_3fr]"
+              className="grid w-full max-w-[1400px] grid-cols-1 gap-6 sm:grid-cols-[4fr_3fr]"
               order={widgetLayout.order}
               isEditing={widgetLayout.isEditing}
               onReorder={widgetLayout.moveWidget}
@@ -12229,119 +12465,44 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
                     </div>
 
                     <div className="mt-6">
-                      <h4 className="text-sm font-semibold uppercase tracking-[0.24em] text-[color:var(--muted)]">✅ Finished</h4>
-                      {finishedBooks.length === 0 ? (
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <h4 className="text-sm font-semibold uppercase tracking-[0.24em] text-[color:var(--muted)]">✅ Finished</h4>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <select
+                            value={finishedAuthorFilter}
+                            onChange={(event) => setFinishedAuthorFilter(event.target.value)}
+                            aria-label="Filter finished books by author"
+                            className="rounded-full border border-[color:var(--border)] bg-[color:var(--surface-soft)] px-3 py-1 text-[11px] font-semibold text-[color:var(--foreground)] outline-none"
+                          >
+                            <option value={ALL_AUTHORS_FILTER}>All Authors</option>
+                            {finishedAuthors.map((author) => (
+                              <option key={author} value={author}>
+                                {author}
+                              </option>
+                            ))}
+                          </select>
+                          <div className="flex items-center gap-0.5 rounded-full border border-[color:var(--border)] bg-[color:var(--surface-soft)] p-0.5 w-fit">
+                            {BOOK_SORT_OPTIONS.map((option) => (
+                              <button
+                                key={option.value}
+                                type="button"
+                                onClick={() => handleSelectFinishedBooksSort(option.value)}
+                                className={`rounded-full px-2.5 py-1 text-[11px] font-semibold transition ${
+                                  finishedBooksSort === option.value
+                                    ? 'bg-[color:var(--accent)] text-[color:var(--accent-contrast)]'
+                                    : 'text-[color:var(--muted)] hover:bg-[color:var(--surface-strong)]'
+                                }`}
+                              >
+                                {option.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                      {finishedBooksSorted.length === 0 ? (
                         <p className="mt-3 text-sm text-[color:var(--muted)]">No finished books yet.</p>
                       ) : (
-                        <div className="mt-3 space-y-3">{finishedBooks.map(renderBookRow)}</div>
-                      )}
-                    </div>
-
-                    <div className="mt-6">
-                      <h4 className="text-sm font-semibold uppercase tracking-[0.24em] text-[color:var(--muted)]">Want to Read</h4>
-                      {wantToReadBooks.length === 0 ? (
-                        <p className="mt-3 text-sm text-[color:var(--muted)]">Your to-read list is empty.</p>
-                      ) : (
-                        <div className="mt-3 space-y-2">
-                          {wantToReadBooks.map((book) => {
-                            const isEditingThisBook = editingBookId === book.id;
-                            const isDeletingThisBook = deletingBookId === book.id;
-                            const isExpandedThisBook = expandedBookId === book.id;
-                            if (isEditingThisBook || isDeletingThisBook || isExpandedThisBook) {
-                              return renderBookRow(book);
-                            }
-                            const gradient = getBookGradient(book.id);
-                            return (
-                              <div
-                                key={book.id}
-                                className="flex items-start gap-3 rounded-[18px] border border-[color:var(--border)] bg-[color:var(--surface-soft)] p-3"
-                              >
-                                <div
-                                  className="h-28 w-20 shrink-0 overflow-hidden rounded-[14px]"
-                                  style={
-                                    book.cover_image_url
-                                      ? undefined
-                                      : { background: `linear-gradient(135deg, ${gradient.from} 0%, ${gradient.to} 100%)` }
-                                  }
-                                >
-                                  {book.cover_image_url ? (
-                                    // eslint-disable-next-line @next/next/no-img-element
-                                    <img src={book.cover_image_url} alt="" className="h-full w-full object-cover" />
-                                  ) : null}
-                                </div>
-                                {book.description ? (
-                                  <button
-                                    type="button"
-                                    onClick={() => handleToggleExpandBook(book.id)}
-                                    aria-expanded={isExpandedThisBook}
-                                    className="min-w-0 flex-1 text-left"
-                                  >
-                                    <p className="truncate text-sm font-semibold text-[color:var(--foreground)]">{book.title}</p>
-                                    {book.author ? <p className="truncate text-xs text-[color:var(--muted)]">{book.author}</p> : null}
-                                    {book.genre ? (
-                                      <span className="mt-1 inline-block rounded-full bg-[color:var(--accent-soft)] px-2 py-0.5 text-[10px] font-semibold text-[color:var(--accent-strong)]">
-                                        {book.genre}
-                                      </span>
-                                    ) : null}
-                                    <p className="mt-1 truncate text-xs italic text-[color:var(--muted)]">{book.description}</p>
-                                  </button>
-                                ) : (
-                                  <div className="min-w-0 flex-1">
-                                    <p className="truncate text-sm font-semibold text-[color:var(--foreground)]">{book.title}</p>
-                                    {book.author ? <p className="truncate text-xs text-[color:var(--muted)]">{book.author}</p> : null}
-                                    {book.genre ? (
-                                      <span className="mt-1 inline-block rounded-full bg-[color:var(--accent-soft)] px-2 py-0.5 text-[10px] font-semibold text-[color:var(--accent-strong)]">
-                                        {book.genre}
-                                      </span>
-                                    ) : null}
-                                  </div>
-                                )}
-                                <div className="flex shrink-0 items-center gap-1">
-                                  <button
-                                    type="button"
-                                    onClick={() => handleStartEditBook(book)}
-                                    aria-label="Edit book"
-                                    className="rounded-full p-1.5 text-[color:var(--muted)] transition hover:bg-[color:var(--surface-strong)] hover:text-[color:var(--accent-strong)]"
-                                  >
-                                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                                      <path
-                                        d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"
-                                        stroke="currentColor"
-                                        strokeWidth="2"
-                                        strokeLinecap="round"
-                                        strokeLinejoin="round"
-                                      />
-                                    </svg>
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleStartDeleteBook(book.id)}
-                                    aria-label="Delete book"
-                                    className="rounded-full p-1.5 text-[color:var(--muted)] transition hover:bg-[color:var(--surface-strong)] hover:text-[color:var(--accent-strong)]"
-                                  >
-                                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                                      <path d="M4 7h16" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                                      <path
-                                        d="M9 7V4.5A1.5 1.5 0 0 1 10.5 3h3A1.5 1.5 0 0 1 15 4.5V7"
-                                        stroke="currentColor"
-                                        strokeWidth="2"
-                                        strokeLinecap="round"
-                                        strokeLinejoin="round"
-                                      />
-                                      <path
-                                        d="M6 7l1 13a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-13"
-                                        stroke="currentColor"
-                                        strokeWidth="2"
-                                        strokeLinecap="round"
-                                        strokeLinejoin="round"
-                                      />
-                                    </svg>
-                                  </button>
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
+                        <div className="mt-3 max-h-[440px] space-y-3 overflow-y-auto pr-1">{finishedBooksSorted.map(renderBookRow)}</div>
                       )}
                     </div>
                   </>
@@ -12497,13 +12658,29 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
                   </span>
                 </div>
 
+                <div className="mt-3">
+                  <select
+                    value={favoriteAuthorFilter}
+                    onChange={(event) => setFavoriteAuthorFilter(event.target.value)}
+                    aria-label="Filter favorites by author"
+                    className="rounded-full border border-[color:var(--border)] bg-[color:var(--surface-soft)] px-3 py-1 text-[11px] font-semibold text-[color:var(--foreground)] outline-none"
+                  >
+                    <option value={ALL_AUTHORS_FILTER}>All Authors</option>
+                    {favoriteAuthors.map((author) => (
+                      <option key={author} value={author}>
+                        {author}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
                 {isLoadingBooks ? (
                   <p className="mt-4 text-sm text-[color:var(--muted)]">Loading favorites…</p>
-                ) : favoriteBooks.length === 0 ? (
+                ) : favoriteBooksSorted.length === 0 ? (
                   <p className="mt-4 text-sm text-[color:var(--muted)]">Rate a finished book 5 stars to see it here.</p>
                 ) : (
                   <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
-                    {favoriteBooks.map((book) => {
+                    {favoriteBooksSorted.map((book) => {
                       const gradient = getBookGradient(book.id);
                       return (
                         <div key={book.id} className="flex flex-col items-center gap-1.5 text-center">
@@ -12528,6 +12705,213 @@ export default function MochiboardApp({ activeView = 'dashboard' }: { activeView
                       );
                     })}
                   </div>
+                )}
+              </section>
+              </DraggableWidget>
+
+              <DraggableWidget id="wantToRead" key="wantToRead" className="sm:col-span-2">
+              <section className="rounded-[34px] border border-[color:var(--border)] bg-[color:var(--surface)] p-5 shadow-[var(--shadow-soft)]">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-lg font-semibold text-[color:var(--foreground)]" style={{ fontFamily: 'var(--font-display)' }}>
+                    Want to Read
+                  </h3>
+                  <span className="rounded-full bg-[color:var(--accent-soft)] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em] text-[color:var(--accent-strong)]">
+                    {wantToReadBooks.length} {wantToReadBooks.length === 1 ? 'book' : 'books'}
+                  </span>
+                </div>
+
+                {wantToReadError ? <p className="mt-3 text-sm text-[#dc2626]">{wantToReadError}</p> : null}
+
+                {isLoadingBooks ? (
+                  <p className="mt-4 text-sm text-[color:var(--muted)]">Loading books…</p>
+                ) : wantToReadBooks.length === 0 ? (
+                  <p className="mt-4 text-sm text-[color:var(--muted)]">Your to-read list is empty.</p>
+                ) : (
+                  <div className="mt-4 max-h-[440px] space-y-2 overflow-y-auto pr-1">
+                    {wantToReadBooks.map((book) => {
+                      const isEditingThisBook = editingBookId === book.id;
+                      const isDeletingThisBook = deletingBookId === book.id;
+                      const isExpandedThisBook = expandedBookId === book.id;
+                      if (isEditingThisBook || isDeletingThisBook || isExpandedThisBook) {
+                        return renderBookRow(book);
+                      }
+                      const gradient = getBookGradient(book.id);
+                      return (
+                        <div
+                          key={book.id}
+                          className="flex items-start gap-3 rounded-[18px] border border-[color:var(--border)] bg-[color:var(--surface-soft)] p-3"
+                        >
+                          <div
+                            className="h-28 w-20 shrink-0 overflow-hidden rounded-[14px]"
+                            style={
+                              book.cover_image_url
+                                ? undefined
+                                : { background: `linear-gradient(135deg, ${gradient.from} 0%, ${gradient.to} 100%)` }
+                            }
+                          >
+                            {book.cover_image_url ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img src={book.cover_image_url} alt="" className="h-full w-full object-cover" />
+                            ) : null}
+                          </div>
+                          {book.description ? (
+                            <button
+                              type="button"
+                              onClick={() => handleToggleExpandBook(book.id)}
+                              aria-expanded={isExpandedThisBook}
+                              className="min-w-0 flex-1 text-left"
+                            >
+                              <p className="truncate text-sm font-semibold text-[color:var(--foreground)]">{book.title}</p>
+                              {book.author ? <p className="truncate text-xs text-[color:var(--muted)]">{book.author}</p> : null}
+                              {book.genre ? (
+                                <span className="mt-1 inline-block rounded-full bg-[color:var(--accent-soft)] px-2 py-0.5 text-[10px] font-semibold text-[color:var(--accent-strong)]">
+                                  {book.genre}
+                                </span>
+                              ) : null}
+                              <p className="mt-1 truncate text-xs italic text-[color:var(--muted)]">{book.description}</p>
+                            </button>
+                          ) : (
+                            <div className="min-w-0 flex-1">
+                              <p className="truncate text-sm font-semibold text-[color:var(--foreground)]">{book.title}</p>
+                              {book.author ? <p className="truncate text-xs text-[color:var(--muted)]">{book.author}</p> : null}
+                              {book.genre ? (
+                                <span className="mt-1 inline-block rounded-full bg-[color:var(--accent-soft)] px-2 py-0.5 text-[10px] font-semibold text-[color:var(--accent-strong)]">
+                                  {book.genre}
+                                </span>
+                              ) : null}
+                            </div>
+                          )}
+                          <div className="flex shrink-0 items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => handleStartEditBook(book)}
+                              aria-label="Edit book"
+                              className="rounded-full p-1.5 text-[color:var(--muted)] transition hover:bg-[color:var(--surface-strong)] hover:text-[color:var(--accent-strong)]"
+                            >
+                              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                <path
+                                  d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"
+                                  stroke="currentColor"
+                                  strokeWidth="2"
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                />
+                              </svg>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleStartDeleteBook(book.id)}
+                              aria-label="Delete book"
+                              className="rounded-full p-1.5 text-[color:var(--muted)] transition hover:bg-[color:var(--surface-strong)] hover:text-[color:var(--accent-strong)]"
+                            >
+                              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                <path d="M4 7h16" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                                <path
+                                  d="M9 7V4.5A1.5 1.5 0 0 1 10.5 3h3A1.5 1.5 0 0 1 15 4.5V7"
+                                  stroke="currentColor"
+                                  strokeWidth="2"
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                />
+                                <path
+                                  d="M6 7l1 13a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-13"
+                                  stroke="currentColor"
+                                  strokeWidth="2"
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                />
+                              </svg>
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {showAddWantToReadForm ? (
+                  <form
+                    onSubmit={handleCreateWantToReadBook}
+                    className="mt-6 space-y-2 rounded-[24px] border border-dashed border-[color:var(--border)] p-4"
+                  >
+                    <div className="flex flex-wrap items-center gap-2">
+                      <input
+                        value={wantToReadTitle}
+                        onChange={(event) => setWantToReadTitle(event.target.value)}
+                        placeholder="Title"
+                        autoFocus
+                        aria-label="Book title"
+                        className="min-w-0 flex-1 basis-[160px] rounded-full border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-sm text-[color:var(--foreground)] outline-none"
+                      />
+                      <input
+                        value={wantToReadAuthor}
+                        onChange={(event) => setWantToReadAuthor(event.target.value)}
+                        placeholder="Author (optional)"
+                        aria-label="Author"
+                        className="min-w-0 flex-1 basis-[160px] rounded-full border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-sm text-[color:var(--foreground)] outline-none"
+                      />
+                      <input
+                        value={wantToReadGenre}
+                        onChange={(event) => setWantToReadGenre(event.target.value)}
+                        placeholder="Genre (optional)"
+                        aria-label="Genre"
+                        className="min-w-0 flex-1 basis-[160px] rounded-full border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-sm text-[color:var(--foreground)] outline-none"
+                      />
+                    </div>
+
+                    <textarea
+                      value={wantToReadDescription}
+                      onChange={(event) => setWantToReadDescription(event.target.value)}
+                      placeholder="Description (optional)"
+                      aria-label="Description"
+                      rows={3}
+                      className="w-full resize-none rounded-[16px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-sm text-[color:var(--foreground)] outline-none"
+                    />
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      <label className="text-[11px] font-semibold uppercase tracking-[0.24em] text-[color:var(--muted)]">Cover image</label>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={(event) => setWantToReadCoverFile(event.target.files?.[0] ?? null)}
+                        aria-label="Cover image"
+                        className="min-w-0 flex-1 text-xs text-[color:var(--muted)] file:mr-2 file:rounded-full file:border-0 file:bg-[color:var(--accent-soft)] file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-[color:var(--accent-strong)]"
+                      />
+                    </div>
+
+                    {wantToReadError ? <p className="text-xs font-medium text-red-500">{wantToReadError}</p> : null}
+
+                    <div className="flex justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowAddWantToReadForm(false);
+                          setWantToReadError(null);
+                        }}
+                        className="rounded-full border border-[color:var(--border)] px-3 py-1.5 text-xs font-semibold text-[color:var(--muted)] transition hover:bg-[color:var(--surface-strong)]"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={isSavingWantToReadBook}
+                        className="rounded-full bg-[color:var(--accent)] px-4 py-1.5 text-xs font-semibold text-[color:var(--accent-contrast)] transition hover:bg-[color:var(--accent-strong)] disabled:opacity-70"
+                      >
+                        {isSavingWantToReadBook ? 'Adding…' : 'Add book'}
+                      </button>
+                    </div>
+                  </form>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setWantToReadError(null);
+                      setShowAddWantToReadForm(true);
+                    }}
+                    className="mt-6 w-full rounded-[24px] border border-dashed border-[color:var(--border)] py-3 text-sm font-semibold text-[color:var(--muted)] transition hover:border-[color:var(--accent)] hover:text-[color:var(--accent-strong)]"
+                  >
+                    + Add book
+                  </button>
                 )}
               </section>
               </DraggableWidget>
